@@ -43,8 +43,9 @@ def split_wide_image_if_needed(img_path: str, out_dir: str, normal_ratio: float 
             base = os.path.splitext(os.path.basename(img_path))[0]
             ext = os.path.splitext(img_path)[1].lower()
 
+
             # 横向拆分
-            if w / h >= 1.25:
+            if w / h >= 1.35:
                 if h > w:  # 纵图横置情况
                     im = im.rotate(ROTATE_DEGREE, expand=True)
                     w, h = im.size
@@ -57,9 +58,9 @@ def split_wide_image_if_needed(img_path: str, out_dir: str, normal_ratio: float 
                 save_image_part(right, right_path)
                 print(f"  - split [wide-LR] {base} {w}x{h}")
                 return [right_path, left_path]
-
-            # 上下堆叠拆分
-            if h / w >= 1.80:
+            
+            # 上下堆叠拆分：高度必须比宽度大至少2.0倍，并且宽度大于某个最小阈值（可选）
+            if h / w >= 2.0 and w >= 400:
                 top = im.crop((0, 0, w, h//2))
                 bottom = im.crop((0, h//2, w, h))
                 if ROTATE_VERTICAL_SPLIT_PAGE:
