@@ -44,7 +44,7 @@ def dedupe_cover_images_cv(
     for path in image_paths[1:]:
         img = Image.open(path).convert("L")
         
-        print(f"[DEBUG] dedupe img type={type(img)}, value={img}")
+        # print(f"[DEBUG] dedupe img type={type(img)}, value={img}")
 
         arr = np.array(img)
         hist_curr = cv2.calcHist([arr], [0], None, [256], [0, 256])
