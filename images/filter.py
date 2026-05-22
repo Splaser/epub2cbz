@@ -24,24 +24,7 @@ def log_skip(reason, path):
 def should_skip_html_by_name(html_path: str) -> bool:
     """根据 HTML 文件名判断是否跳过（尾页、广告页）"""
     name = os.path.basename(html_path).lower()
-    stem = os.path.splitext(name)[0]
 
-    exact_bad_names = {
-        "end",
-        "ad",
-        "ads",
-        "adv",
-        "advertisement",
-        "copyright",
-        "about",
-        "source",
-        "credits",
-        "colophon",
-        "backcover",
-        "afterword",
-    }
-    if stem in exact_bad_names:
-        return True
 
     bad_parts = BAD_KEYWORDS_COMMON | BAD_KEYWORDS_HTML_EXTRA
     return any(part in name for part in bad_parts)
