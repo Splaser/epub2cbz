@@ -69,7 +69,7 @@ def is_probable_cover_html(html_path: str) -> bool:
 
 
 def is_image_file(path: str) -> bool:
-    return path.lower().endswith(IMG_EXT)
+    return path.lower().endswith(tuple(IMG_EXT))
 
 
 def dedupe_keep_order(items: List[str]) -> List[str]:
@@ -84,58 +84,36 @@ def dedupe_keep_order(items: List[str]) -> List[str]:
     return out
 
 
-def get_garbage_image_reason(img_path: str) -> str | None:
+def get_garbage_image_reason(img_path: str, val_mean_threshold=250) -> str | None:
     """
-    判断图片是否为垃圾页
-    改进：
-    - 极高白色比例 (>0.995) + 极小尺寸(<60KB) 才跳过
-    - 边缘密度低 (<0.002) 进一步确认极空白页
-    - 保留白色比例高但有内容/角色页
+    低门槛垃圾页检测：
+    - 高白、低边缘、亮度接近最大值
+    - 可针对首几页广告/空白页使用
     """
-    name = os.path.basename(img_path).lower()
-
-    # 文件名关键字直接跳过
-    for k in BAD_KEYWORDS_COMMON:
-        if k in name:
-            return f"name-keyword:{k}"
-
     try:
         size_kb = os.path.getsize(img_path) / 1024
-    except Exception:
-        return None
+        im = Image.open(img_path).convert("RGB")
+        arr = np.array(im)
 
-    try:
-        with Image.open(img_path) as im:
-            w, h = im.size
-            if w <= 0 or h <= 0:
-                return None
-
-            im_gray = im.convert("L")
-            im_gray.thumbnail((256, 256), Image.Resampling.BILINEAR)
-            arr = np.asarray(im_gray)
-            total = arr.size
-            if total == 0:
-                return None
-
-            near_white_ratio = np.count_nonzero(arr >= 245) / total
-            near_black_ratio = np.count_nonzero(arr <= 10) / total
-
-            # 边缘密度
-            edges = cv2.Canny(arr, 100, 200)
-            edge_density = np.count_nonzero(edges) / total
+        # 灰度
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        total = gray.size
+        near_white_ratio = np.count_nonzero(gray >= 245) / total
+        edge_density = np.count_nonzero(cv2.Canny(gray, 100, 200)) / total
+        val_mean = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)[:, :, 2].mean()
 
     except Exception:
         return None
 
-    # 黑页保护
-    if near_black_ratio > 0.90:
-        return None
-
-    # 改进的垃圾页规则
+    # 原有极端垃圾页规则（保留）
     if near_white_ratio > 0.995 and size_kb < 60 and edge_density < 0.002:
         return f"small-extreme-white size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f}"
 
-    # 保留其他白色比例高的过渡页（edge_density >= 0.002 或体积较大）
+    # **针对第三张广告页**
+    # 条件：白度 >0.98, 边缘密度低, 文件小于120KB, 明度均值接近最大
+    if near_white_ratio > 0.98 and edge_density < 0.01 and size_kb < 140 and val_mean > val_mean_threshold:
+        return f"frontpage-ad size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f} val_mean={val_mean:.1f}"
+
     return None
 
 

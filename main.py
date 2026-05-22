@@ -1,7 +1,7 @@
 import os
 import tempfile
 import shutil
-from images.filter import get_garbage_image_reason
+from images.filter import get_garbage_image_reason, filter_html_files, is_image_file
 from parser.html_parser import extract_images_from_html
 from builder.cbz_builder import make_cbz
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
@@ -20,30 +20,31 @@ def epub_to_cbz_fixed(epub_path):
         # 严格 spine 顺序获取 HTML
         html_files, spine_dicts = get_html_files_by_spine(temp_dir)
 
+        # 使用 filter_html_files 直接过滤 HTML 对应的图片
+        filtered_images = filter_html_files(html_files)
+
         images_with_index = []
-        for spine_idx, item in enumerate(spine_dicts):
-            html_path = item["local_path"]
-            imgs = extract_images_from_html(html_path)
-            
-            kept_imgs = []
-            split_counter = 0
-            for img in imgs:
-                reason = get_garbage_image_reason(img)
-                if reason:
-                    try:
-                        size_kb = os.path.getsize(img) // 1024
-                    except Exception:
-                        size_kb = -1
-                    print(f"  - skip [garbage-image:{reason}] {os.path.basename(img)} ({size_kb}KB)")
-                    continue
-                kept_imgs.append(img)
-            
-            # 拆页并保持 spine 顺序
-            for img in kept_imgs:
-                split_imgs = split_wide_image_if_needed(img, temp_dir, enable_split=True)
-                for s_img in split_imgs:
-                    images_with_index.append((spine_idx, split_counter, s_img))
-                    split_counter += 1
+        split_counter = 0
+        for spine_idx, img_path in enumerate(filtered_images):
+            # 只处理合法图片
+            if not is_image_file(img_path):
+                continue
+
+            # 检测垃圾页
+            reason = get_garbage_image_reason(img_path)
+            if reason:
+                try:
+                    size_kb = os.path.getsize(img_path) // 1024
+                except Exception:
+                    size_kb = -1
+                print(f"  - skip [garbage-image:{reason}] {os.path.basename(img_path)} ({size_kb}KB)")
+                continue
+
+            # 拆页处理
+            split_imgs = split_wide_image_if_needed(img_path, temp_dir, enable_split=True)
+            for s_img in split_imgs:
+                images_with_index.append((spine_idx, split_counter, s_img))
+                split_counter += 1
 
         # fallback 仅补缺页
         if not images_with_index:
