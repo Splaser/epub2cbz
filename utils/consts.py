@@ -34,6 +34,22 @@ BAD_KEYWORDS_CONTENT_EXTRA = {
     "版权归原作者所有",
 }
 
+TAIL_AD_KEYWORDS = [
+    "mox",
+    "kox",
+    "18comic",
+    "wnacg",
+    "manhuagui",
+    "koz",
+    "最新地址",
+    "最新域名",
+    "收藏本站",
+    "加入书签",
+    "在线阅读",
+    "在線閱讀",
+    "版权归原作者所有",
+    "版權歸原作者所有",
+]
 
 SPECIAL_KEYWORDS = [
     "原画集", "頁集", "设定集", "公式书",    

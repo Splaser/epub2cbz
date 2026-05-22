@@ -11,6 +11,8 @@ from utils.consts import (
     BAD_KEYWORDS_COMMON,
     BAD_KEYWORDS_HTML_EXTRA,
     BAD_KEYWORDS_CONTENT_EXTRA,
+    TAIL_AD_KEYWORDS,
+
 )
 
 
@@ -153,22 +155,7 @@ def filter_html_files(html_paths: List[str]) -> List[str]:
 
         if is_last_html:
             stem = os.path.splitext(os.path.basename(html_path))[0].lower()
-            tail_ad_keywords = [
-                "mox",
-                "kox",
-                "18comic",
-                "wnacg",
-                "manhuagui",
-                "koz",
-                "最新地址",
-                "最新域名",
-                "收藏本站",
-                "加入书签",
-                "在线阅读",
-                "在線閱讀",
-                "版权归原作者所有",
-                "版權歸原作者所有",
-            ]
+ 
             try:
                 with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
                     last_content = f.read().lower()
@@ -176,7 +163,7 @@ def filter_html_files(html_paths: List[str]) -> List[str]:
                 last_content = ""
 
             tail_hit = next(
-                (k for k in tail_ad_keywords if k.lower() in last_content), None
+                (k for k in TAIL_AD_KEYWORDS if k.lower() in last_content), None
             )
             if tail_hit or stem in {"end", "ad", "ads", "adv"}:
                 log_skip(f"last-html-tail:{tail_hit}", html_path)
