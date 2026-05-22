@@ -2,9 +2,16 @@
 import os
 import re
 from typing import List
+from PIL import Image
+import numpy as np
+import cv2
 
-from utils.consts import IMG_EXT, BAD_KEYWORDS_COMMON, BAD_KEYWORDS_HTML_EXTRA, BAD_KEYWORDS_CONTENT_EXTRA
-
+from utils.consts import (
+    IMG_EXT,
+    BAD_KEYWORDS_COMMON,
+    BAD_KEYWORDS_HTML_EXTRA,
+    BAD_KEYWORDS_CONTENT_EXTRA,
+)
 
 
 def log_skip(reason, path):
@@ -17,9 +24,18 @@ def should_skip_html_by_name(html_path: str) -> bool:
     stem = os.path.splitext(name)[0]
 
     exact_bad_names = {
-        "end", "ad", "ads", "adv", "advertisement",
-        "copyright", "about", "source", "credits",
-        "colophon", "backcover", "afterword"
+        "end",
+        "ad",
+        "ads",
+        "adv",
+        "advertisement",
+        "copyright",
+        "about",
+        "source",
+        "credits",
+        "colophon",
+        "backcover",
+        "afterword",
     }
     if stem in exact_bad_names:
         return True
@@ -49,9 +65,6 @@ def is_probable_cover_html(html_path: str) -> bool:
     return any(k in name for k in ["cover", "封面", "frontcover", "backcover"])
 
 
-
-
-
 def is_image_file(path: str) -> bool:
     return path.lower().endswith(IMG_EXT)
 
@@ -71,12 +84,14 @@ def dedupe_keep_order(items: List[str]) -> List[str]:
 def get_garbage_image_reason(img_path: str) -> str | None:
     """
     判断图片是否为垃圾页
-    根据文件名、大小、高白等规则
-    返回原因字符串或 None
+    改进：
+    - 极高白色比例 (>0.995) + 极小尺寸(<60KB) 才跳过
+    - 边缘密度低 (<0.002) 进一步确认极空白页
+    - 保留白色比例高但有内容/角色页
     """
     name = os.path.basename(img_path).lower()
 
-    # 文件名关键字
+    # 文件名关键字直接跳过
     for k in BAD_KEYWORDS_COMMON:
         if k in name:
             return f"name-keyword:{k}"
@@ -86,18 +101,12 @@ def get_garbage_image_reason(img_path: str) -> str | None:
     except Exception:
         return None
 
-    from PIL import Image
-    import numpy as np
-
     try:
         with Image.open(img_path) as im:
             w, h = im.size
             if w <= 0 or h <= 0:
                 return None
 
-            aspect_ratio = round(w / h, 4)
-
-            # 缩小采样判断
             im_gray = im.convert("L")
             im_gray.thumbnail((256, 256), Image.Resampling.BILINEAR)
             arr = np.asarray(im_gray)
@@ -108,21 +117,22 @@ def get_garbage_image_reason(img_path: str) -> str | None:
             near_white_ratio = np.count_nonzero(arr >= 245) / total
             near_black_ratio = np.count_nonzero(arr <= 10) / total
 
+            # 边缘密度
+            edges = cv2.Canny(arr, 100, 200)
+            edge_density = np.count_nonzero(edges) / total
+
     except Exception:
         return None
 
-    # 规则1：黑页保护
+    # 黑页保护
     if near_black_ratio > 0.90:
         return None
 
-    # 规则2：极小 + 高白 = 垃圾页
-    if size_kb < 45 and near_white_ratio > 0.95 and aspect_ratio > 0.73:
-        return f"small-highwhite size={size_kb:.1f}KB white={near_white_ratio:.3f} ratio={aspect_ratio}"
+    # 改进的垃圾页规则
+    if near_white_ratio > 0.995 and size_kb < 60 and edge_density < 0.002:
+        return f"small-extreme-white size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f}"
 
-    # 规则3：小图 + 极高留白 = 垃圾页
-    if size_kb < 100 and near_white_ratio > 0.97 and aspect_ratio > 0.74:
-        return f"small-extremewhite size={size_kb:.1f}KB white={near_white_ratio:.3f} ratio={aspect_ratio}"
-
+    # 保留其他白色比例高的过渡页（edge_density >= 0.002 或体积较大）
     return None
 
 
@@ -144,9 +154,20 @@ def filter_html_files(html_paths: List[str]) -> List[str]:
         if is_last_html:
             stem = os.path.splitext(os.path.basename(html_path))[0].lower()
             tail_ad_keywords = [
-                "mox", "kox", "18comic", "wnacg", "manhuagui", "koz",
-                "最新地址", "最新域名", "收藏本站", "加入书签",
-                "在线阅读", "在線閱讀", "版权归原作者所有", "版權歸原作者所有"
+                "mox",
+                "kox",
+                "18comic",
+                "wnacg",
+                "manhuagui",
+                "koz",
+                "最新地址",
+                "最新域名",
+                "收藏本站",
+                "加入书签",
+                "在线阅读",
+                "在線閱讀",
+                "版权归原作者所有",
+                "版權歸原作者所有",
             ]
             try:
                 with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -154,15 +175,20 @@ def filter_html_files(html_paths: List[str]) -> List[str]:
             except Exception:
                 last_content = ""
 
-            tail_hit = next((k for k in tail_ad_keywords if k.lower() in last_content), None)
+            tail_hit = next(
+                (k for k in tail_ad_keywords if k.lower() in last_content), None
+            )
             if tail_hit or stem in {"end", "ad", "ads", "adv"}:
                 log_skip(f"last-html-tail:{tail_hit}", html_path)
                 continue
 
         # 封面去重
         if is_probable_cover_html(html_path):
-            normalized_stem = re.sub(r"\.(jpg|jpeg|png|webp|gif|bmp)$", "",
-                                     os.path.splitext(os.path.basename(html_path))[0].lower())
+            normalized_stem = re.sub(
+                r"\.(jpg|jpeg|png|webp|gif|bmp)$",
+                "",
+                os.path.splitext(os.path.basename(html_path))[0].lower(),
+            )
             if normalized_stem in cover_seen:
                 continue
             cover_seen.add(normalized_stem)
@@ -182,7 +208,9 @@ def filter_image_files(image_paths: List[str]) -> List[str]:
                 size_kb = os.path.getsize(img) // 1024
             except Exception:
                 size_kb = -1
-            print(f"  - skip [garbage-image:{reason}] {os.path.basename(img)} ({size_kb}KB)")
+            print(
+                f"  - skip [garbage-image:{reason}] {os.path.basename(img)} ({size_kb}KB)"
+            )
             continue
         filtered.append(img)
 
