@@ -1,67 +1,53 @@
-# main.py
 import os
 import tempfile
 import shutil
-import re
-
-
-from parser.html_parser import extract_image_paths_from_html
-from images.filter import filter_html_files, filter_image_files
-from images.splitter import split_images_if_needed
+from images.filter import get_garbage_image_reason
+from parser.html_parser import extract_images_from_html
 from builder.cbz_builder import make_cbz
-from utils.epub_utils import extract_epub, get_html_files_by_spine, get_html_files_by_dir_fallback, fallback_all_images
-from utils.metadata_utils import compute_normal_page_ratio, build_output_cbz_name
+from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
+from utils.metadata_utils import build_output_cbz_name
+from images.splitter import split_wide_image_if_needed
 
-
-def epub_to_cbz(epub_path: str):
+def epub_to_cbz_fixed(epub_path):
     output_name = build_output_cbz_name(epub_path)
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
     temp_dir = tempfile.mkdtemp(prefix="epub2cbz_")
 
     try:
-        # 1. 解压 epub
+        # 解压 EPUB
         extract_epub(epub_path, temp_dir)
 
-        # 2. 获取 HTML 文件
-        try:
-            html_files = get_html_files_by_spine(temp_dir)
-        except Exception:
-            html_files = []
-        if not html_files:
-            html_files = get_html_files_by_dir_fallback(temp_dir)
+        # 严格 spine 顺序获取 HTML
+        html_files, spine_dicts = get_html_files_by_spine(temp_dir)
 
-        # 3. 过滤 HTML
-        html_files = filter_html_files(html_files)
+        images_with_index = []
 
-        # 4. 提取图片路径
-        images = []
-        for html in html_files:
-            images.extend(extract_image_paths_from_html(html))
+        for spine_idx, item in enumerate(spine_dicts):
+            html_path = item["local_path"]
+            imgs = extract_images_from_html(html_path)
+            imgs = [img for img in imgs if not get_garbage_image_reason(img)]
 
-        # 5. 图片过滤
-        images = filter_image_files(images)
+            split_counter = 0  # 保证拆页连续
+            for img in imgs:
+                split_imgs = split_wide_image_if_needed(img, temp_dir, enable_split=True)
+                for s_img in split_imgs:
+                    images_with_index.append((spine_idx, split_counter, s_img))
+                    split_counter += 1
 
-        if not images:
-            # fallback 所有图片
-            images = fallback_all_images(temp_dir)
-            images = filter_image_files(images)
+        # fallback 仅补缺页
+        if not images_with_index:
+            fallback_imgs = fallback_all_images(temp_dir)
+            fallback_imgs = [img for img in fallback_imgs if not get_garbage_image_reason(img)]
+            for f_idx, f_img in enumerate(fallback_imgs):
+                images_with_index.append((9999, 0, f_idx, f_img))  # spine_idx=9999表示 fallback
 
-        if not images:
-            print(f"❌ no images found in {epub_path}")
-            return
+        # 排序
+        images_with_index.sort(key=lambda x: (x[0], x[1]))
+        final_images = [img for _, _, img in images_with_index]
 
-        # 6. 计算正常比例
-        normal_ratio = compute_normal_page_ratio(images)
-
-        # 7. 拆页
-        images = split_images_if_needed(images, temp_dir, normal_ratio=normal_ratio)
-
-        # 8. 打包 CBZ
-        make_cbz(images, output_cbz)
-        print(f"✅ {output_name}  [{len(images)} pages]")
-
-    except Exception as e:
-        print(f"❌ failed: {epub_path} -> {e}")
+        # 打包 CBZ
+        make_cbz(final_images, output_cbz)
+        print(f"✅ CBZ created: {output_cbz}, total pages: {len(final_images)}")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -69,10 +55,6 @@ def epub_to_cbz(epub_path: str):
 
 if __name__ == "__main__":
     epub_files = [f for f in os.listdir(".") if f.lower().endswith(".epub")]
-    epub_files.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)])
-
-    if not epub_files:
-        print("当前目录没有找到 epub 文件。")
-    else:
-        for epub in epub_files:
-            epub_to_cbz(epub)
+    epub_files.sort()
+    for epub in epub_files:
+        epub_to_cbz_fixed(epub)

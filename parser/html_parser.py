@@ -4,7 +4,7 @@ import posixpath
 from html.parser import HTMLParser
 from urllib.parse import unquote
 from typing import List
-
+from bs4 import BeautifulSoup
 from utils.consts import IMG_EXT
 
 
@@ -100,3 +100,29 @@ def extract_image_paths_from_html(html_path: str) -> List[str]:
             results.append(img_path)
 
     return results
+
+
+
+
+def extract_images_from_html(html_path: str) -> list[str]:
+    """
+    从 HTML 文件提取所有图片路径
+    返回列表，仅包含本地图片路径（绝对或相对可处理）
+    """
+    if not os.path.exists(html_path):
+        return []
+
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    soup = BeautifulSoup(content, "html.parser")
+    imgs = []
+
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if src:
+            # 解析相对路径
+            img_path = os.path.normpath(os.path.join(os.path.dirname(html_path), src))
+            imgs.append(img_path)
+
+    return imgs

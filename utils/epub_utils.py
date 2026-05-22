@@ -1,4 +1,5 @@
 # utils/epub_utils.py
+from logging import root
 import os
 import zipfile
 import posixpath
@@ -50,40 +51,41 @@ def find_opf_path(extract_dir: str) -> str:
     raise Exception("OPF not found in container.xml")
 
 
-def parse_opf(opf_path: str) -> Tuple[dict, List[str], str]:
-    """解析 OPF 文件，返回 manifest, spine 列表, 基础目录"""
+def parse_opf(opf_path: str):
     tree = ET.parse(opf_path)
     root = tree.getroot()
     manifest = {}
-    spine = []
 
+    # 先解析 manifest
     for elem in root.iter():
         if elem.tag.endswith("item"):
             item_id = elem.attrib.get("id")
             href = elem.attrib.get("href")
             media_type = elem.attrib.get("media-type", "")
             if item_id and href:
-                manifest[item_id] = {"href": href, "media_type": media_type}
+                manifest[item_id] = {
+                    "href": href,
+                    "media_type": media_type,
+                    "local_path": resolve_fs_path(os.path.dirname(opf_path), href)
+                }
 
+    # 再解析 spine
+    spine = []
     for elem in root.iter():
         if elem.tag.endswith("itemref"):
             idref = elem.attrib.get("idref")
             if idref and idref in manifest:
-                spine.append(manifest[idref]["href"])
+                spine.append(manifest[idref])
 
     return manifest, spine, os.path.dirname(opf_path)
 
 
-def get_html_files_by_spine(temp_dir: str) -> List[str]:
-    """通过 spine 顺序获取 HTML 文件列表"""
-    opf_path = find_opf_path(temp_dir)
+# spine_dicts[i] = {"id": ..., "href": ..., "media_type": ..., "local_path": ...}
+def get_html_files_by_spine(temp_dir: str):
+    opf_path = os.path.join(temp_dir, "vol.opf")
     manifest, spine, base_dir = parse_opf(opf_path)
-    html_files = []
-    for href in spine:
-        html_path = resolve_fs_path(base_dir, href)
-        if os.path.exists(html_path):
-            html_files.append(html_path)
-    return html_files
+    html_files = [item["local_path"] for item in spine if os.path.exists(item["local_path"])]
+    return html_files, spine
 
 
 def get_html_files_by_dir_fallback(temp_dir: str) -> List[str]:
