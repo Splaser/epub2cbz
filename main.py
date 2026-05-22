@@ -21,14 +21,25 @@ def epub_to_cbz_fixed(epub_path):
         html_files, spine_dicts = get_html_files_by_spine(temp_dir)
 
         images_with_index = []
-
         for spine_idx, item in enumerate(spine_dicts):
             html_path = item["local_path"]
             imgs = extract_images_from_html(html_path)
-            imgs = [img for img in imgs if not get_garbage_image_reason(img)]
-
-            split_counter = 0  # 保证拆页连续
+            
+            kept_imgs = []
+            split_counter = 0
             for img in imgs:
+                reason = get_garbage_image_reason(img)
+                if reason:
+                    try:
+                        size_kb = os.path.getsize(img) // 1024
+                    except Exception:
+                        size_kb = -1
+                    print(f"  - skip [garbage-image:{reason}] {os.path.basename(img)} ({size_kb}KB)")
+                    continue
+                kept_imgs.append(img)
+            
+            # 拆页并保持 spine 顺序
+            for img in kept_imgs:
                 split_imgs = split_wide_image_if_needed(img, temp_dir, enable_split=True)
                 for s_img in split_imgs:
                     images_with_index.append((spine_idx, split_counter, s_img))
