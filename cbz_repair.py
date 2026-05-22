@@ -1,5 +1,6 @@
 # cbz_repair.py
 import os
+import sys
 import zipfile
 import tempfile
 import shutil
@@ -69,7 +70,13 @@ def repair_cbz(cbz_path: str):
 # 批量处理当前目录 CBZ
 # -----------------------------
 if __name__ == "__main__":
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 获取当前目录
+    if getattr(sys, "frozen", False):
+        current_dir = os.path.dirname(sys.executable)
+    else:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+
     cbz_files = [
         os.path.join(current_dir, f)
         for f in os.listdir(current_dir)
