@@ -1,11 +1,34 @@
 # utils/metadata_utils.py
 import os
 import re
+import numpy as np
+from PIL import Image
+from typing import List
+
+
 from .consts import (
     VOL_PATTERN_LIST,
     SPECIAL_KEYWORDS,
-)  # 你可以把原来匹配卷/期的正则抽到 consts.py
+)
 
+
+
+def compute_normal_page_ratio(image_paths: List[str]) -> float:
+    """
+    计算漫画全书正常单页宽高比中位数
+    """
+    ratios = []
+    for img_path in image_paths:
+        try:
+            with Image.open(img_path) as im:
+                w, h = im.size
+                if w > 0 and h > 0:
+                    ratios.append(w / h)
+        except Exception:
+            continue
+    if not ratios:
+        return 1.0  # 防止除零
+    return np.median(ratios)
 
 # utils/metadata_utils.py
 def zh_to_int(text: str) -> int | None:
@@ -39,18 +62,25 @@ def clean_raw_name(raw_name: str) -> str:
     return cleaned
 
 
+def extract_series_name(raw_name: str) -> str:
+    """
+    从文件名中提取中文系列名，删除网站/方括号信息
+    例如：[Kmoe][蠟筆小新]卷01 -> 蠟筆小新
+    """
+    # 取第一个中文字符开头的方括号内容
+    m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', raw_name)
+    if m:
+        return m[-1]  # 取最后一个包含中文的方括号
+    # fallback 父目录名
+    return os.path.basename(os.path.dirname(raw_name))
+
+
 def build_output_cbz_name(
     epub_path: str, series_name: str = None, is_periodical: bool = False
 ) -> str:
     raw_name = os.path.splitext(os.path.basename(epub_path))[0]
 
-    # 优先提取文件名前缀 [作者][系列]
-    m = re.match(r"(\[[^\]]+\])(\[[^\]]+\])", raw_name)
-    if m:
-        series_name = "".join(m.groups())
-    else:
-        series_name = series_name or os.path.basename(os.path.dirname(epub_path))
-
+    series_name = extract_series_name(raw_name)
     cleaned = clean_raw_name(raw_name)
 
     # 1) 期刊 T/D 特刊优先
