@@ -72,10 +72,16 @@ def analyze_image(img_path):
 
 if __name__ == "__main__":
     # PyInstaller onefile 下 __file__ 会指向临时解包目录，不能用来定位图片。
-    # 默认扫描当前工作目录；也允许手动传入图片目录。
+    # 默认扫描 probing binary 自己所在目录；也允许手动传入图片目录覆盖。
     import sys
 
-    dir_path = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    if len(sys.argv) > 1:
+        dir_path = sys.argv[1]
+    elif getattr(sys, "frozen", False):
+        dir_path = os.path.dirname(sys.executable)
+    else:
+        dir_path = os.path.dirname(os.path.abspath(__file__))
+
     dir_path = os.path.abspath(dir_path)
 
     # 获取所有 JPEG/PNG 文件
