@@ -4,7 +4,7 @@ from typing import List
 from PIL import Image
 import numpy as np
 import cv2
-from images.cv_cover_dedup import is_rgb_color_image
+from images.cv_cover_dedup import is_rgb_color_image, dedupe_cover_images_cv
 
 from parser.html_parser import extract_image_paths_from_html
 from utils.consts import (
@@ -194,7 +194,8 @@ def filter_html_files(html_files: List[str]) -> List[str]:
 
   
     cover_candidates = [p[0] if isinstance(p, tuple) else p for p in cover_candidates]
-    unique_covers = dedupe_keep_order(cover_candidates)
+    unique_covers = dedupe_cover_images_cv(cover_candidates, similarity_threshold=0.95)
+    unique_covers = [p[0] if isinstance(p, tuple) else p for p in unique_covers]
 
     # 彩色保底
     if not any(is_rgb_color_image(p) for p in unique_covers):
