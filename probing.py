@@ -71,8 +71,12 @@ def analyze_image(img_path):
 
 
 if __name__ == "__main__":
-    # 当前目录
-    dir_path = os.path.dirname(os.path.abspath(__file__))
+    # PyInstaller onefile 下 __file__ 会指向临时解包目录，不能用来定位图片。
+    # 默认扫描当前工作目录；也允许手动传入图片目录。
+    import sys
+
+    dir_path = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    dir_path = os.path.abspath(dir_path)
 
     # 获取所有 JPEG/PNG 文件
     all_images = [
@@ -80,6 +84,10 @@ if __name__ == "__main__":
         for f in os.listdir(dir_path)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ]
+
+    if not all_images:
+        print(f"未找到图片文件: {dir_path}")
+        raise SystemExit(1)
 
     # 按文件大小排序（升序）并只取前10个最小
     all_images.sort(key=lambda f: os.path.getsize(f))
