@@ -8,6 +8,7 @@ from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all
 from utils.metadata_utils import build_output_cbz_name
 from images.splitter import split_wide_image_if_needed
 
+
 def epub_to_cbz_fixed(epub_path):
     output_name = build_output_cbz_name(epub_path)
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
@@ -51,8 +52,7 @@ def epub_to_cbz_fixed(epub_path):
             fallback_imgs = fallback_all_images(temp_dir)
             fallback_imgs = [img for img in fallback_imgs if not get_garbage_image_reason(img)]
             for f_idx, f_img in enumerate(fallback_imgs):
-                images_with_index.append((9999, 0, f_idx, f_img))  # spine_idx=9999表示 fallback
-
+                images_with_index.append((9999, f_idx, f_img))
         # 排序
         images_with_index.sort(key=lambda x: (x[0], x[1]))
         final_images = [img for _, _, img in images_with_index]
@@ -65,8 +65,22 @@ def epub_to_cbz_fixed(epub_path):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def get_base_dir():
+    import sys, os
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 if __name__ == "__main__":
-    epub_files = [f for f in os.listdir(".") if f.lower().endswith(".epub")]
+    base_dir = get_base_dir()
+    os.chdir(base_dir)
+
+    epub_files = [f for f in os.listdir(base_dir) if f.lower().endswith(".epub")]
     epub_files.sort()
+
+    if not epub_files:
+        print(f"❌ No epub files found in: {base_dir}")
+
     for epub in epub_files:
-        epub_to_cbz_fixed(epub)
+        epub_to_cbz_fixed(os.path.join(base_dir, epub))
