@@ -67,7 +67,7 @@ def dedupe_keep_order(items: List[str]) -> List[str]:
     return out
 
 
-def get_garbage_image_reason(img_path: str, val_mean_threshold=250) -> str | None:
+def get_garbage_image_reason(img_path: str, val_mean_threshold=252) -> str | None:
     """
     低门槛垃圾页检测：
     - 高白、低边缘、亮度接近最大值
@@ -83,6 +83,8 @@ def get_garbage_image_reason(img_path: str, val_mean_threshold=250) -> str | Non
         total = gray.size
         near_white_ratio = np.count_nonzero(gray >= 245) / total
         edge_density = np.count_nonzero(cv2.Canny(gray, 100, 200)) / total
+        near_black_ratio = np.count_nonzero(gray <= 10) / total
+        non_white_ratio = np.count_nonzero(gray < 245) / total
         val_mean = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)[:, :, 2].mean()
 
     except Exception:
@@ -92,10 +94,21 @@ def get_garbage_image_reason(img_path: str, val_mean_threshold=250) -> str | Non
     if near_white_ratio > 0.995 and size_kb < 60 and edge_density < 0.002:
         return f"small-extreme-white size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f}"
 
-    # **针对第三张广告页**
-    # 条件：白度 >0.98, 边缘密度低, 文件小于120KB, 明度均值接近最大
-    if near_white_ratio > 0.98 and edge_density < 0.01 and size_kb < 140 and val_mean > val_mean_threshold:
-        return f"frontpage-ad size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f} val_mean={val_mean:.1f}"
+    # 保守广告页规则：老漫画目录页常见“白底 + 少量黑字 + 小体积”，
+    # 不能只凭高白度和小文件直接删除；必须同时满足几乎没有黑字/线稿信息。
+    if (
+        near_white_ratio >= 0.989
+        and edge_density < 0.006
+        and size_kb < 120
+        and val_mean > val_mean_threshold
+        and near_black_ratio < 0.002
+        and non_white_ratio <= 0.012
+    ):
+        return (
+            f"frontpage-ad size={size_kb:.1f}KB white={near_white_ratio:.3f} "
+            f"edge={edge_density:.3f} val_mean={val_mean:.1f} "
+            f"black={near_black_ratio:.3f} nonwhite={non_white_ratio:.3f}"
+        )
 
     return None
 

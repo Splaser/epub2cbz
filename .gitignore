@@ -222,4 +222,5 @@ __marimo__/
 *.epub
 *.cbz
 
+tmp/
 test/
