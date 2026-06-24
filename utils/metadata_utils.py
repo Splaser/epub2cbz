@@ -69,15 +69,19 @@ def clean_raw_name(raw_name: str) -> str:
 
 
 def extract_series_name(path_or_name: str) -> str:
+    path_or_name = str(path_or_name).replace("\\", "/")
+
     base = os.path.splitext(os.path.basename(path_or_name))[0]
 
     m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', base)
     if m:
         return m[-1].strip()
 
-    parent = os.path.basename(os.path.dirname(path_or_name)).strip()
-    if parent and parent not in {".", os.sep}:
-        return parent
+    parts = [p for p in path_or_name.split("/") if p]
+    if len(parts) >= 2:
+        parent = os.path.splitext(parts[-2])[0].strip()
+        if parent and parent not in {".", ".."}:
+            return parent
 
     return clean_raw_name(base).strip()
 
@@ -87,7 +91,10 @@ def build_output_cbz_name(
 ) -> str:
     raw_name = os.path.splitext(os.path.basename(epub_path))[0]
 
-    series_name = series_name or extract_series_name(epub_path)
+    series_name = (series_name or extract_series_name(epub_path) or "").strip()
+    if not series_name:
+        series_name = clean_raw_name(raw_name).strip() or "Unknown"
+    
     cleaned = clean_raw_name(raw_name)
 
     # 1) 期刊 T/D 特刊优先
