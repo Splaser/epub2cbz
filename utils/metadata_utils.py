@@ -12,6 +12,12 @@ from .consts import (
 )
 
 
+def extract_special_label(cleaned: str) -> str | None:
+    for kw in SPECIAL_KEYWORDS:
+        if kw.lower() in cleaned.lower():
+            return kw
+    return None
+
 
 def compute_normal_page_ratio(image_paths: List[str]) -> float:
     """
@@ -62,17 +68,18 @@ def clean_raw_name(raw_name: str) -> str:
     return cleaned
 
 
-def extract_series_name(raw_name: str) -> str:
-    """
-    从文件名中提取中文系列名，删除网站/方括号信息
-    例如：[Kmoe][蠟筆小新]卷01 -> 蠟筆小新
-    """
-    # 取第一个中文字符开头的方括号内容
-    m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', raw_name)
+def extract_series_name(path_or_name: str) -> str:
+    base = os.path.splitext(os.path.basename(path_or_name))[0]
+
+    m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', base)
     if m:
-        return m[-1]  # 取最后一个包含中文的方括号
-    # fallback 父目录名
-    return os.path.basename(os.path.dirname(raw_name))
+        return m[-1].strip()
+
+    parent = os.path.basename(os.path.dirname(path_or_name)).strip()
+    if parent and parent not in {".", os.sep}:
+        return parent
+
+    return clean_raw_name(base).strip()
 
 
 def build_output_cbz_name(
@@ -80,7 +87,7 @@ def build_output_cbz_name(
 ) -> str:
     raw_name = os.path.splitext(os.path.basename(epub_path))[0]
 
-    series_name = extract_series_name(raw_name)
+    series_name = series_name or extract_series_name(epub_path)
     cleaned = clean_raw_name(raw_name)
 
     # 1) 期刊 T/D 特刊优先
@@ -115,9 +122,19 @@ def build_output_cbz_name(
             return f"{series_name} - 第{int(a):03d}-{int(b):03d}期.cbz"
 
     # 2) 普通特刊/番外/特典/画集
-    for kw in SPECIAL_KEYWORDS:
-        if kw.lower() in cleaned.lower():
-            return f"{series_name} - {cleaned}.cbz"
+    special_kw = extract_special_label(cleaned)
+    if special_kw:
+        vol = None
+        for p in VOL_PATTERN_LIST:
+            m = re.search(p, cleaned, re.IGNORECASE)
+            if m:
+                vol = int(m.group(1))
+                break
+
+        if vol is not None:
+            return f"{series_name} - {special_kw} 第{vol:03d}册.cbz"
+
+        return f"{series_name} - {cleaned}.cbz"
 
     # 3) 普通卷 / 期
     vol = None
