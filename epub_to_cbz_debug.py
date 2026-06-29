@@ -4,7 +4,7 @@ import shutil
 import re
 from parser.html_parser import extract_image_paths_from_html, is_image_file
 from images.filter import filter_html_files, filter_image_files
-from images.splitter import split_images_if_needed
+from images.splitter import infer_common_page_size, split_wide_image_if_needed
 from builder.cbz_builder import make_cbz
 from utils.epub_utils import extract_epub, get_html_files_by_spine, get_html_files_by_dir_fallback, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
@@ -75,8 +75,13 @@ def epub_to_cbz_enhanced(epub_path: str):
 
         # 拆页并保持 spine index
         final_split_images = []
+        common_page_size = infer_common_page_size([img_path for _, _, img_path in images_with_index])
         for spine_idx, split_idx, img_path in images_with_index:
-            split_imgs = split_images_if_needed([img_path], temp_dir)
+            split_imgs = split_wide_image_if_needed(
+                img_path,
+                temp_dir,
+                common_page_size=common_page_size,
+            )
             for s_idx, s_img in enumerate(split_imgs):
                 final_split_images.append((spine_idx, split_idx, s_idx, s_img))
 

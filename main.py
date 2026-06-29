@@ -6,7 +6,7 @@ from parser.html_parser import extract_images_from_html
 from builder.cbz_builder import make_cbz
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
-from images.splitter import split_wide_image_if_needed
+from images.splitter import infer_common_page_size, split_wide_image_if_needed
 
 
 def epub_to_cbz_fixed(epub_path):
@@ -24,8 +24,7 @@ def epub_to_cbz_fixed(epub_path):
         # 使用 filter_html_files 直接过滤 HTML 对应的图片
         filtered_images = filter_html_files(html_files)
 
-        images_with_index = []
-        split_counter = 0
+        valid_images = []
         for spine_idx, img_path in enumerate(filtered_images):
             # 只处理合法图片
             if not is_image_file(img_path):
@@ -41,8 +40,20 @@ def epub_to_cbz_fixed(epub_path):
                 print(f"  - skip [garbage-image:{reason}] {os.path.basename(img_path)} ({size_kb}KB)")
                 continue
 
+            valid_images.append((spine_idx, img_path))
+
+        common_page_size = infer_common_page_size([img_path for _, img_path in valid_images])
+
+        images_with_index = []
+        split_counter = 0
+        for spine_idx, img_path in valid_images:
             # 拆页处理
-            split_imgs = split_wide_image_if_needed(img_path, temp_dir, enable_split=True)
+            split_imgs = split_wide_image_if_needed(
+                img_path,
+                temp_dir,
+                enable_split=True,
+                common_page_size=common_page_size,
+            )
             for s_img in split_imgs:
                 images_with_index.append((spine_idx, split_counter, s_img))
                 split_counter += 1
