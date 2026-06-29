@@ -938,7 +938,7 @@ def _matches_common_page_size(
     w: int,
     h: int,
     common_page_size: tuple[int, int] | None,
-    tolerance_ratio: float = 0.025,
+    tolerance_ratio: float = 0.04,
 ) -> bool:
     if common_page_size is None:
         return False
@@ -973,12 +973,19 @@ def _tb_split_parts_match_common_page_size(
     else:
         top_w, bottom_w = w, w
 
-    return _matches_common_page_size(top_w, top_h, common_page_size, tolerance_ratio=0.04) and _matches_common_page_size(
+    top_matches = _matches_common_page_size(
+        top_w,
+        top_h,
+        common_page_size,
+        tolerance_ratio=0.04,
+    )
+    bottom_matches = _matches_common_page_size(
         bottom_w,
         bottom_h,
         common_page_size,
         tolerance_ratio=0.04,
     )
+    return top_matches and bottom_matches
 
 
 def _tb_split_parts_match_common_aspect(
@@ -1003,7 +1010,7 @@ def _tb_split_parts_match_common_aspect(
         if ROTATE_VERTICAL_SPLIT_PAGE:
             part_w, part_h = part_h, part_w
         part_ratio = min(part_w, part_h) / max(1, max(part_w, part_h))
-        if abs(part_ratio - common_ratio) > 0.08:
+        if abs(part_ratio - common_ratio) > 0.04:
             return False
 
     return True
@@ -1015,12 +1022,22 @@ def _tb_pre_split_skip_reason(
     is_common_page_size: bool,
     common_page_size: tuple[int, int] | None,
 ) -> str | None:
-    parts_match_common_page = _tb_split_parts_match_common_page_size(im, split_y, common_page_size)
-    parts_match_common_aspect = _tb_split_parts_match_common_aspect(im, split_y, common_page_size)
+    parts_match_common_page = _tb_split_parts_match_common_page_size(
+        im,
+        split_y,
+        common_page_size,
+    )
+    parts_match_common_aspect = _tb_split_parts_match_common_aspect(
+        im,
+        split_y,
+        common_page_size,
+    )
     has_text_direction_mismatch = should_skip_tb_split_by_text_direction(im, split_y)
     has_original_vertical_layout = has_vertical_text_layout(im)
 
-    if is_common_page_size and not parts_match_common_page and not parts_match_common_aspect:
+    if common_page_size is not None and not parts_match_common_page and not (
+        is_common_page_size and parts_match_common_aspect
+    ):
         return "common-page-part-aspect"
 
     if (
