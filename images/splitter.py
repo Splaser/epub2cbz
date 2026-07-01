@@ -1,5 +1,6 @@
 # images/splitter.py
 import os
+import re
 from typing import List
 
 import numpy as np
@@ -10,6 +11,68 @@ try:
     import cv2
 except Exception:
     cv2 = None
+
+
+_ROTATE_TAG_CACHE: dict[str, dict[str, int]] = {}
+
+
+def _epub_root_for_image(img_path: str) -> str | None:
+    parent = os.path.dirname(os.path.abspath(img_path))
+    if not parent:
+        return None
+    root = os.path.dirname(parent)
+    try:
+        if (
+            os.path.isdir(os.path.join(root, "META-INF"))
+            or os.path.isdir(os.path.join(root, "html"))
+            or any(name.lower().endswith(".opf") for name in os.listdir(root))
+        ):
+            return root
+    except OSError:
+        pass
+    return None
+
+
+def _load_epub_rotate_tags(root_dir: str) -> dict[str, int]:
+    cached = _ROTATE_TAG_CACHE.get(root_dir)
+    if cached is not None:
+        return cached
+
+    tags: dict[str, int] = {}
+    img_tag_re = re.compile(r"""<img\b[^>]*>""", re.IGNORECASE)
+    src_re = re.compile(r"""\bsrc=["']([^"']+\.(?:jpe?g|png|webp|gif))["']""", re.IGNORECASE)
+    rotate_re = re.compile(r"""\bkmoetag=["'][^"']*rotate:(\d+)""", re.IGNORECASE)
+
+    for dirpath, _, filenames in os.walk(root_dir):
+        for filename in filenames:
+            if not filename.lower().endswith((".html", ".htm", ".xhtml")):
+                continue
+            path = os.path.join(dirpath, filename)
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError:
+                continue
+
+            for tag_match in img_tag_re.finditer(text):
+                tag = tag_match.group(0)
+                src_match = src_re.search(tag)
+                rotate_match = rotate_re.search(tag)
+                if src_match is None or rotate_match is None:
+                    continue
+                tags[os.path.basename(src_match.group(1))] = int(rotate_match.group(1))
+
+    _ROTATE_TAG_CACHE[root_dir] = tags
+    return tags
+
+
+def get_epub_rotate_hint(img_path: str) -> int | None:
+    root_dir = _epub_root_for_image(img_path)
+    if root_dir is None or not os.path.isdir(root_dir):
+        return None
+
+    tags = _load_epub_rotate_tags(root_dir)
+    return tags.get(os.path.basename(img_path))
 
 
 def should_allow_tb_split_by_rotated_text_flow(im: Image.Image, split_y: int) -> bool:
@@ -69,6 +132,48 @@ def has_clean_horizontal_separator(im: Image.Image, split_y: int) -> bool:
             clean_bands += 1
 
     return clean_bands >= 10
+
+
+def has_relaxed_horizontal_separator(im: Image.Image, split_y: int) -> bool:
+    """
+    Looser separator check for EPUB pages explicitly marked as rotated.
+    Chapter/title spreads can put logo text over the center gutter, so the strict
+    clean-band check may reject them even though the gutter is real.
+    """
+    w, h = im.size
+    if split_y <= 0 or split_y >= h:
+        return False
+
+    gray = np.asarray(im.convert("L"))
+    half_h = max(6, int(h * 0.005))
+    y0 = max(0, split_y - half_h)
+    y1 = min(h, split_y + half_h + 1)
+    x0 = int(w * 0.035)
+    x1 = int(w * 0.965)
+    band = gray[y0:y1, x0:x1]
+    if band.size == 0:
+        return False
+
+    white_ratio = float((band >= 242).mean())
+    dark_ratio = float((band <= 80).mean())
+    if white_ratio < 0.68 or dark_ratio > 0.08:
+        return False
+
+    band_count = 15
+    band_w = max(1, band.shape[1] // band_count)
+    usable_bands = 0
+    for i in range(band_count):
+        bx0 = i * band_w
+        bx1 = band.shape[1] if i == band_count - 1 else (i + 1) * band_w
+        local = band[:, bx0:bx1]
+        if local.size == 0:
+            continue
+        local_white = float((local >= 242).mean())
+        local_dark = float((local <= 80).mean())
+        if local_white >= 0.56 and local_dark <= 0.13:
+            usable_bands += 1
+
+    return usable_bands >= 9
 
 # --- New function for horizontal gutter detection ---
 def find_horizontal_gutter_y_cv(im: Image.Image) -> int | None:
@@ -1021,6 +1126,7 @@ def _tb_pre_split_skip_reason(
     split_y: int,
     is_common_page_size: bool,
     common_page_size: tuple[int, int] | None,
+    rotate_hint: int | None = None,
 ) -> str | None:
     parts_match_common_page = _tb_split_parts_match_common_page_size(
         im,
@@ -1034,6 +1140,12 @@ def _tb_pre_split_skip_reason(
     )
     has_text_direction_mismatch = should_skip_tb_split_by_text_direction(im, split_y)
     has_original_vertical_layout = has_vertical_text_layout(im)
+
+    if rotate_hint == 0:
+        return "epub-rotate-tag"
+
+    if rotate_hint == 1 and parts_match_common_aspect:
+        return None
 
     if common_page_size is not None and not parts_match_common_page and not (
         is_common_page_size and parts_match_common_aspect
@@ -1115,15 +1227,26 @@ def split_wide_image_if_needed(
             base = os.path.splitext(os.path.basename(img_path))[0]
             ext = os.path.splitext(img_path)[1].lower()
             is_common_page_size = _matches_common_page_size(w, h, common_page_size)
+            rotate_hint = get_epub_rotate_hint(img_path)
             # Rotated double-page scans often show the real page separator as a
             # horizontal white gutter. Detect this before the generic ratio rules.
             if w >= 800 and h >= 500:
                 split_y, split_reason, rejected_y = find_clean_horizontal_gutter_y(im)
                 if split_y is None and rejected_y is not None:
-                    print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
+                    if rotate_hint == 1 and has_relaxed_horizontal_separator(im, rejected_y):
+                        split_y = rejected_y
+                        split_reason = "rotate-tag"
+                    else:
+                        print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
 
                 if split_y is not None:
-                    skip_reason = _tb_pre_split_skip_reason(im, split_y, is_common_page_size, common_page_size)
+                    skip_reason = _tb_pre_split_skip_reason(
+                        im,
+                        split_y,
+                        is_common_page_size,
+                        common_page_size,
+                        rotate_hint=rotate_hint,
+                    )
                     if skip_reason is not None:
                         print(f"  - keep [split-skip:{skip_reason}] {base} {w}x{h} y={split_y}")
                         return [img_path]
