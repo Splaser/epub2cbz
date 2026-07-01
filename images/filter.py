@@ -80,6 +80,7 @@ def get_garbage_image_reason(img_path: str, val_mean_threshold=252) -> str | Non
 
         # 灰度
         gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        gray_std = gray.std()
         total = gray.size
         near_white_ratio = np.count_nonzero(gray >= 245) / total
         edge_density = np.count_nonzero(cv2.Canny(gray, 100, 200)) / total
@@ -94,22 +95,22 @@ def get_garbage_image_reason(img_path: str, val_mean_threshold=252) -> str | Non
     if near_white_ratio > 0.995 and size_kb < 60 and edge_density < 0.002:
         return f"small-extreme-white size={size_kb:.1f}KB white={near_white_ratio:.3f} edge={edge_density:.3f}"
 
-    # 保守广告页规则：老漫画目录页常见“白底 + 少量黑字 + 小体积”，
-    # 不能只凭高白度和小文件直接删除；必须同时满足几乎没有黑字/线稿信息。
     if (
-        near_white_ratio >= 0.989
-        and edge_density < 0.006
-        and size_kb < 120
-        and val_mean > val_mean_threshold
-        and near_black_ratio < 0.002
-        and non_white_ratio <= 0.012
+        near_white_ratio >= 0.985
+        and edge_density < 0.007
+        and size_kb < 140
+        and val_mean > 252
+        and gray_std < 22
+        and near_black_ratio < 0.003
+        and non_white_ratio <= 0.018
     ):
         return (
-            f"frontpage-ad size={size_kb:.1f}KB white={near_white_ratio:.3f} "
+            f"low-info-white-ad size={size_kb:.1f}KB white={near_white_ratio:.3f} "
             f"edge={edge_density:.3f} val_mean={val_mean:.1f} "
-            f"black={near_black_ratio:.3f} nonwhite={non_white_ratio:.3f}"
+            f"std={gray_std:.1f} black={near_black_ratio:.3f} "
+            f"nonwhite={non_white_ratio:.3f}"
         )
-
+    
     return None
 
 
