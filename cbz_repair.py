@@ -128,4 +128,4 @@ if __name__ == "__main__":
         print(f"❌ No cbz files found in: {base_dir}")
 
     for cbz in cbz_files:
-        repair_cbz(cbz, overwrite=True, backup=True)
+        repair_cbz(cbz, overwrite=True, backup=False)
