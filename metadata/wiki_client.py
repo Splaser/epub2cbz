@@ -1,0 +1,214 @@
+# metadata/wiki_client.py
+from __future__ import annotations
+
+import json
+import time
+from typing import Any, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+
+try:
+    from metadata.wiki_models import WikiPageData, WikiPageSummary, WikiSearchItem
+except ModuleNotFoundError:
+    from wiki_models import WikiPageData, WikiPageSummary, WikiSearchItem
+
+
+DEFAULT_API_URL = "https://zh.wikipedia.org/w/api.php"
+DEFAULT_REST_SUMMARY_URL = "https://zh.wikipedia.org/api/rest_v1/page/summary/{}"
+DEFAULT_USER_AGENT = "epub2cbz-comicinfo/0.1 (local metadata tool)"
+
+
+class WikiClient:
+    """
+    Thin MediaWiki API client.
+
+    This module intentionally returns Wiki DTOs/raw API-shaped metadata only.
+    ComicInfo mapping and CBZ writing belong in higher layers.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_url: str = DEFAULT_API_URL,
+        rest_summary_url: str = DEFAULT_REST_SUMMARY_URL,
+        user_agent: str = DEFAULT_USER_AGENT,
+        timeout: float = 20.0,
+        max_retries: int = 3,
+        sleep: float = 0.7,
+    ) -> None:
+        self.api_url = api_url
+        self.rest_summary_url = rest_summary_url
+        self.user_agent = user_agent
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.sleep = sleep
+
+    def search(self, query: str, *, limit: int = 5) -> list[WikiSearchItem]:
+        data = self._get_json(
+            self.api_url,
+            params={
+                "action": "query",
+                "format": "json",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": limit,
+                "utf8": 1,
+            },
+        )
+        return [
+            WikiSearchItem(
+                title=str(item.get("title") or ""),
+                pageid=int(item.get("pageid") or 0),
+                snippet=item.get("snippet"),
+                size=item.get("size"),
+                wordcount=item.get("wordcount"),
+            )
+            for item in data.get("query", {}).get("search", []) or []
+            if item.get("title") and item.get("pageid")
+        ]
+
+    def summary(self, title: str) -> WikiPageSummary:
+        data = self._get_json(
+            self.rest_summary_url.format(quote(title)),
+            use_maxlag=False,
+        )
+        return _summary_from_json(data)
+
+    def page_data(self, title: str) -> WikiPageData:
+        summary = self.summary(title)
+        if self.sleep:
+            time.sleep(self.sleep)
+
+        page_json = self._query_page(title)
+        page = extract_page_record(page_json)
+        if page is None:
+            raise ValueError(f"Wiki page not found: {title}")
+
+        wikitext = extract_wikitext_from_page(page)
+        if not wikitext:
+            raise ValueError(f"Wiki page has no wikitext: {title}")
+
+        pageprops = page.get("pageprops") or {}
+        categories = [
+            str(item.get("title", "")).replace("Category:", "", 1)
+            for item in page.get("categories", []) or []
+            if isinstance(item, dict) and item.get("title")
+        ]
+
+        return WikiPageData(
+            title=str(page.get("title") or summary.title or title),
+            pageid=int(page.get("pageid") or 0),
+            wikitext=wikitext,
+            extract=summary.extract or page.get("extract"),
+            description=summary.description,
+            page_url=page.get("fullurl") or summary.page_url,
+            thumbnail_url=summary.thumbnail_url,
+            wikibase_item=pageprops.get("wikibase_item") or summary.wikibase_item,
+            defaultsort=pageprops.get("defaultsort"),
+            categories=categories,
+        )
+
+    def page_data_for_query(self, query: str, *, limit: int = 5) -> WikiPageData:
+        results = self.search(query, limit=limit)
+        if not results:
+            raise ValueError(f"No Wiki search results for: {query}")
+        if self.sleep:
+            time.sleep(self.sleep)
+        return self.page_data(results[0].title)
+
+    def _query_page(self, title: str) -> dict[str, Any]:
+        return self._get_json(
+            self.api_url,
+            params={
+                "action": "query",
+                "format": "json",
+                "prop": "extracts|categories|pageprops|info|revisions",
+                "titles": title,
+                "exintro": 1,
+                "explaintext": 1,
+                "cllimit": "max",
+                "rvprop": "content",
+                "rvslots": "main",
+                "inprop": "url",
+                "redirects": 1,
+                "utf8": 1,
+            },
+        )
+
+    def _get_json(
+        self,
+        url: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        use_maxlag: bool = True,
+    ) -> dict[str, Any]:
+        if params is not None:
+            params = dict(params)
+            if use_maxlag:
+                params.setdefault("maxlag", 5)
+            url = f"{url}?{urlencode(params)}"
+
+        last_error: Optional[BaseException] = None
+        for attempt in range(self.max_retries):
+            try:
+                request = Request(url, headers={"User-Agent": self.user_agent})
+                with urlopen(request, timeout=self.timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+
+                if isinstance(data, dict) and data.get("error", {}).get("code") == "maxlag":
+                    time.sleep(2 + attempt * 2)
+                    continue
+
+                return data
+            except HTTPError as exc:
+                last_error = exc
+                if exc.code not in {429, 500, 502, 503, 504}:
+                    break
+            except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = exc
+
+            time.sleep(1 + attempt)
+
+        raise RuntimeError(f"Wiki request failed: {url}") from last_error
+
+
+def extract_page_record(query_result: dict[str, Any]) -> Optional[dict[str, Any]]:
+    pages = query_result.get("query", {}).get("pages", {})
+    if not isinstance(pages, dict):
+        return None
+
+    for page in pages.values():
+        if isinstance(page, dict) and "missing" not in page:
+            return page
+
+    return None
+
+
+def extract_wikitext_from_page(page: dict[str, Any]) -> Optional[str]:
+    revisions = page.get("revisions") or []
+    if not revisions:
+        return None
+
+    revision = revisions[0]
+    slots = revision.get("slots")
+    if isinstance(slots, dict):
+        main = slots.get("main")
+        if isinstance(main, dict):
+            return main.get("*") or main.get("content")
+
+    return revision.get("*")
+
+
+def _summary_from_json(data: dict[str, Any]) -> WikiPageSummary:
+    content_urls = data.get("content_urls") or {}
+    desktop = content_urls.get("desktop") or {}
+    thumbnail = data.get("thumbnail") or {}
+    return WikiPageSummary(
+        title=str(data.get("title") or ""),
+        extract=data.get("extract"),
+        description=data.get("description"),
+        page_url=desktop.get("page"),
+        thumbnail_url=thumbnail.get("source"),
+        wikibase_item=data.get("wikibase_item"),
+    )
