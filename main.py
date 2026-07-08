@@ -2,7 +2,6 @@ import os
 import tempfile
 import shutil
 from images.filter import get_garbage_image_reason, filter_html_files, is_image_file
-from parser.html_parser import extract_images_from_html
 from builder.cbz_builder import make_cbz
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
@@ -19,7 +18,7 @@ def epub_to_cbz_fixed(epub_path):
         extract_epub(epub_path, temp_dir)
 
         # 严格 spine 顺序获取 HTML
-        html_files, spine_dicts = get_html_files_by_spine(temp_dir)
+        html_files, _ = get_html_files_by_spine(temp_dir)
 
         # 使用 filter_html_files 直接过滤 HTML 对应的图片
         filtered_images = filter_html_files(html_files)
