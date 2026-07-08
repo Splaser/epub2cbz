@@ -1,14 +1,20 @@
+import argparse
 import os
 import tempfile
 import shutil
 from images.filter import get_garbage_image_reason, filter_html_files, is_image_file
 from builder.cbz_builder import make_cbz
+from metadata.epub_comicinfo import (
+    build_comicinfo_xml_for_epub,
+    load_exact_wiki_series_for_dir,
+    load_wiki_series_for_url,
+)
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
 from images.splitter import infer_common_page_size, split_wide_image_if_needed
 
 
-def epub_to_cbz_fixed(epub_path):
+def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None):
     output_name = build_output_cbz_name(epub_path)
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
     temp_dir = tempfile.mkdtemp(prefix="epub2cbz_")
@@ -67,8 +73,15 @@ def epub_to_cbz_fixed(epub_path):
         images_with_index.sort(key=lambda x: (x[0], x[1]))
         final_images = [img for _, _, img in images_with_index]
 
+        comicinfo_xml = build_comicinfo_xml_for_epub(
+            epub_path=epub_path,
+            output_cbz_name=output_name,
+            page_count=len(final_images),
+            wiki_series=wiki_series_metadata,
+        )
+
         # 打包 CBZ
-        make_cbz(final_images, output_cbz)
+        make_cbz(final_images, output_cbz, comicinfo_xml=comicinfo_xml)
         print(f"✅ CBZ created: {output_cbz}, total pages: {len(final_images)}")
 
     finally:
@@ -82,7 +95,23 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Convert EPUB files in the current series directory to CBZ.")
+    parser.add_argument(
+        "--wiki-url",
+        help="Explicit zh.wikipedia page URL to use as metadata source when the directory name is not the Wiki title.",
+    )
+    return parser.parse_args()
+
+
+def load_wiki_metadata_for_main(base_dir, wiki_url=None):
+    if wiki_url:
+        return load_wiki_series_for_url(base_dir, wiki_url)
+    return load_exact_wiki_series_for_dir(base_dir)
+
+
 if __name__ == "__main__":
+    args = parse_args()
     base_dir = get_base_dir()
     os.chdir(base_dir)
 
@@ -92,5 +121,9 @@ if __name__ == "__main__":
     if not epub_files:
         print(f"❌ No epub files found in: {base_dir}")
 
+    wiki_series_metadata = None
+    if epub_files:
+        wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
+
     for epub in epub_files:
-        epub_to_cbz_fixed(os.path.join(base_dir, epub))
+        epub_to_cbz_fixed(os.path.join(base_dir, epub), wiki_series_metadata=wiki_series_metadata)

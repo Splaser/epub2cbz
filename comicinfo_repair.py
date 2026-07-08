@@ -7,14 +7,16 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import zipfile
 from typing import Any, Optional
 
-from metadata.comicinfo import ComicInfo
 from metadata.comicinfo_archive import (
     find_comicinfo_entry_name,
     write_comicinfo_to_cbz,
 )
+from metadata.epub_comicinfo import load_exact_wiki_series_for_dir, load_wiki_series_for_url
+from metadata.wiki_models import WikiSeriesMetadata
 from metadata.wiki_scraper import build_series_metadata_from_file
 from metadata.wiki_to_comicinfo import wiki_series_to_comicinfo
 
@@ -32,15 +34,16 @@ IMAGE_EXTS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inject ComicInfo.xml into CBZ files from local Wiki probe output."
+        description="Inject ComicInfo.xml into CBZ files."
     )
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--cbz", help="Single CBZ file to process.")
-    source.add_argument("--dir", help="Directory containing CBZ files.")
+    source.add_argument("--dir", help="Directory containing CBZ files. Defaults to the executable/current script directory.")
 
     metadata = parser.add_mutually_exclusive_group()
     metadata.add_argument("--probe-dir", help="Directory containing 02_summary.json/03_page_full.json/05_wikitext.txt.")
     metadata.add_argument("--wikitext", help="Local 05_wikitext.txt file.")
+    metadata.add_argument("--wiki-url", help="Explicit zh.wikipedia page URL to use as metadata source.")
 
     parser.add_argument("--query", help="Optional query hint for selecting a Manga block.")
     parser.add_argument("--page-title", help="Wiki page title override.")
@@ -71,7 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language-iso", default="zh-Hant-TW")
     parser.add_argument("--manga", default="Yes")
     parser.add_argument("--age-rating", default="Teen")
-    parser.add_argument("--write", action="store_true", help="Actually write ComicInfo.xml. Default is dry-run.")
+    parser.add_argument("--write", action="store_true", help="Actually write ComicInfo.xml. Default for explicit --cbz/--dir is dry-run.")
+    parser.add_argument("--dry-run", action="store_true", help="Do not write. Useful for no-argument executable mode.")
     parser.add_argument("--backup", action="store_true", help="Before --write, copy file to .bak if it does not exist.")
     parser.add_argument("--backup-suffix", default=".bak")
     parser.add_argument("--print-xml", action="store_true", help="Print generated XML for each file.")
@@ -80,14 +84,65 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    wikitext_path, probe_defaults = resolve_probe_inputs(args)
+    base_dir = get_base_dir()
+    Path(base_dir).mkdir(parents=True, exist_ok=True)
+    os.chdir(base_dir)
+    target_dir = resolve_target_dir(args, base_dir)
     cbz_paths = resolve_cbz_paths(args)
+    effective_write = resolve_effective_write(args)
 
     if not cbz_paths:
-        raise FileNotFoundError("No CBZ files found")
+        print(f"❌ No cbz files found in: {target_dir}")
+        return
+
+    wiki = resolve_wiki_metadata(args, target_dir)
+    if wiki is None:
+        print(f"  - skip ComicInfo repair: no exact Wiki metadata for {target_dir.name}")
+        return
 
     for cbz_path in cbz_paths:
-        process_cbz(cbz_path, wikitext_path, probe_defaults, args)
+        process_cbz(cbz_path, args, wiki, effective_write)
+
+
+def get_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def resolve_target_dir(args: argparse.Namespace, base_dir: Path) -> Path:
+    if args.cbz:
+        return Path(args.cbz).resolve().parent
+    if args.dir:
+        return Path(args.dir).resolve()
+    return base_dir
+
+
+def resolve_effective_write(args: argparse.Namespace) -> bool:
+    default_exe_mode = args.cbz is None and args.dir is None
+    if args.dry_run:
+        return False
+    return args.write or default_exe_mode
+
+
+def resolve_wiki_metadata(args: argparse.Namespace, target_dir: Path) -> Optional[WikiSeriesMetadata]:
+    if args.wiki_url:
+        return load_wiki_series_for_url(target_dir, args.wiki_url)
+
+    if args.probe_dir or args.wikitext:
+        wikitext_path, probe_defaults = resolve_probe_inputs(args)
+        return build_series_metadata_from_file(
+            wikitext_path,
+            page_title=args.page_title or probe_defaults.get("page_title") or wikitext_path.parent.name,
+            pageid=args.pageid or probe_defaults.get("pageid") or 0,
+            page_url=args.page_url or probe_defaults.get("page_url"),
+            wikibase_item=args.wikibase_item or probe_defaults.get("wikibase_item"),
+            summary=args.summary or probe_defaults.get("summary"),
+            query=args.query,
+            series_sort=args.series_sort,
+        )
+
+    return load_exact_wiki_series_for_dir(target_dir)
 
 
 def resolve_probe_inputs(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
@@ -164,33 +219,29 @@ def find_default_wikitext() -> Path:
 
 def resolve_cbz_paths(args: argparse.Namespace) -> list[Path]:
     if args.cbz:
-        return [Path(args.cbz)]
+        return [Path(args.cbz).resolve()]
 
-    root = Path(args.dir)
+    root = Path(args.dir).resolve() if args.dir else get_base_dir()
     return sorted(path for path in root.glob("*.cbz") if path.is_file())
 
 
 def process_cbz(
     cbz_path: Path,
-    wikitext_path: Path,
-    probe_defaults: dict[str, Any],
     args: argparse.Namespace,
+    wiki: WikiSeriesMetadata,
+    effective_write: bool,
 ) -> None:
     if not cbz_path.exists():
         raise FileNotFoundError(cbz_path)
 
-    volume_number = infer_volume_number(cbz_path.name)
+    try:
+        volume_number = infer_volume_number(cbz_path.name)
+    except ValueError as exc:
+        print(f"  - skip ComicInfo: {exc}")
+        return
+
     page_count = count_cbz_pages(cbz_path)
     existing_entry = find_existing_comicinfo(cbz_path)
-    wiki = build_series_metadata_from_file(
-        wikitext_path,
-        page_title=args.page_title or probe_defaults.get("page_title") or wikitext_path.parent.name,
-        pageid=args.pageid or probe_defaults.get("pageid") or 0,
-        page_url=args.page_url or probe_defaults.get("page_url"),
-        wikibase_item=args.wikibase_item or probe_defaults.get("wikibase_item"),
-        summary=args.summary or probe_defaults.get("summary"),
-        query=args.query,
-    )
     comicinfo = wiki_series_to_comicinfo(
         wiki,
         volume_number,
@@ -205,7 +256,7 @@ def process_cbz(
     )
 
     print(
-        f"{'[WRITE]' if args.write else '[DRY-RUN]'} {cbz_path} "
+        f"{'[WRITE]' if effective_write else '[DRY-RUN]'} {cbz_path} "
         f"volume={volume_number} pages={page_count} "
         f"existing={existing_entry or '-'}"
     )
@@ -217,7 +268,7 @@ def process_cbz(
     if args.print_xml:
         print(comicinfo.to_xml_string())
 
-    if not args.write:
+    if not effective_write:
         return
 
     if args.backup:
@@ -232,7 +283,7 @@ def resolve_series_title(cbz_path: Path, args: argparse.Namespace) -> Optional[s
 
     use_dir_name = args.series_title_from_dir
     if use_dir_name is None:
-        use_dir_name = args.dir is not None
+        use_dir_name = args.cbz is None
 
     if use_dir_name:
         return cbz_path.parent.name

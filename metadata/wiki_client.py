@@ -5,7 +5,7 @@ import json
 import time
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 try:
@@ -76,10 +76,6 @@ class WikiClient:
         return _summary_from_json(data)
 
     def page_data(self, title: str) -> WikiPageData:
-        summary = self.summary(title)
-        if self.sleep:
-            time.sleep(self.sleep)
-
         page_json = self._query_page(title)
         page = extract_page_record(page_json)
         if page is None:
@@ -89,6 +85,16 @@ class WikiClient:
         if not wikitext:
             raise ValueError(f"Wiki page has no wikitext: {title}")
 
+        page_title = str(page.get("title") or title)
+        converted_title = extract_converted_title(page_json, title)
+        summary = None
+        try:
+            if self.sleep:
+                time.sleep(self.sleep)
+            summary = self.summary(page_title)
+        except Exception:
+            summary = None
+
         pageprops = page.get("pageprops") or {}
         categories = [
             str(item.get("title", "")).replace("Category:", "", 1)
@@ -97,14 +103,16 @@ class WikiClient:
         ]
 
         return WikiPageData(
-            title=str(page.get("title") or summary.title or title),
+            requested_title=title,
+            title=page_title,
             pageid=int(page.get("pageid") or 0),
             wikitext=wikitext,
-            extract=summary.extract or page.get("extract"),
-            description=summary.description,
-            page_url=page.get("fullurl") or summary.page_url,
-            thumbnail_url=summary.thumbnail_url,
-            wikibase_item=pageprops.get("wikibase_item") or summary.wikibase_item,
+            converted_title=converted_title,
+            extract=(summary.extract if summary else None) or page.get("extract"),
+            description=summary.description if summary else None,
+            page_url=page.get("fullurl") or (summary.page_url if summary else None),
+            thumbnail_url=summary.thumbnail_url if summary else None,
+            wikibase_item=pageprops.get("wikibase_item") or (summary.wikibase_item if summary else None),
             defaultsort=pageprops.get("defaultsort"),
             categories=categories,
         )
@@ -116,6 +124,9 @@ class WikiClient:
         if self.sleep:
             time.sleep(self.sleep)
         return self.page_data(results[0].title)
+
+    def page_data_for_url(self, url: str) -> WikiPageData:
+        return self.page_data(wiki_title_from_url(url))
 
     def _query_page(self, title: str) -> dict[str, Any]:
         return self._get_json(
@@ -132,6 +143,7 @@ class WikiClient:
                 "rvslots": "main",
                 "inprop": "url",
                 "redirects": 1,
+                "converttitles": 1,
                 "utf8": 1,
             },
         )
@@ -185,6 +197,16 @@ def extract_page_record(query_result: dict[str, Any]) -> Optional[dict[str, Any]
     return None
 
 
+def extract_converted_title(query_result: dict[str, Any], source_title: str) -> Optional[str]:
+    converted = query_result.get("query", {}).get("converted", []) or []
+    for item in converted:
+        if not isinstance(item, dict):
+            continue
+        if item.get("from") == source_title and item.get("to"):
+            return str(item["to"])
+    return None
+
+
 def extract_wikitext_from_page(page: dict[str, Any]) -> Optional[str]:
     revisions = page.get("revisions") or []
     if not revisions:
@@ -198,6 +220,25 @@ def extract_wikitext_from_page(page: dict[str, Any]) -> Optional[str]:
             return main.get("*") or main.get("content")
 
     return revision.get("*")
+
+
+def wiki_title_from_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"Not a Wiki URL: {url}")
+
+    query = parse_qs(parsed.query)
+    if query.get("title"):
+        return unquote(query["title"][0]).replace("_", " ").strip()
+
+    marker = "/wiki/"
+    if marker in parsed.path:
+        title = parsed.path.split(marker, 1)[1]
+        title = title.split("#", 1)[0]
+        if title:
+            return unquote(title).replace("_", " ").strip()
+
+    raise ValueError(f"Cannot infer Wiki title from URL: {url}")
 
 
 def _summary_from_json(data: dict[str, Any]) -> WikiPageSummary:

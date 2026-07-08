@@ -7,6 +7,7 @@ import shutil
 from images.filter import get_garbage_image_reason, is_image_file
 from images.splitter import infer_common_page_size, split_wide_image_if_needed
 from builder.cbz_builder import make_cbz
+from metadata.comicinfo_archive import find_comicinfo_entry_name
 
 
 def iter_images_recursive(root_dir: str):
@@ -28,6 +29,7 @@ def repair_cbz(cbz_path: str, overwrite: bool = True, backup: bool = True):
 
     try:
         with zipfile.ZipFile(cbz_path, "r") as z:
+            comicinfo_xml = read_existing_comicinfo_xml(z)
             z.extractall(temp_dir)
 
         image_files = iter_images_recursive(temp_dir)
@@ -94,7 +96,7 @@ def repair_cbz(cbz_path: str, overwrite: bool = True, backup: bool = True):
                 shutil.copy2(cbz_path, backup_path)
                 print(f"  - backup created: {backup_path}")
 
-        make_cbz(final_images, out_path)
+        make_cbz(final_images, out_path, comicinfo_xml=comicinfo_xml)
 
         print(
             f"✅ CBZ repaired: {out_path}, "
@@ -105,6 +107,18 @@ def repair_cbz(cbz_path: str, overwrite: bool = True, backup: bool = True):
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def read_existing_comicinfo_xml(archive: zipfile.ZipFile):
+    entry_name = find_comicinfo_entry_name(archive.namelist())
+    if entry_name is None:
+        return None
+
+    try:
+        return archive.read(entry_name)
+    except Exception as exc:
+        print(f"  - skip existing ComicInfo.xml: {exc}")
+        return None
 
 
 def get_base_dir():

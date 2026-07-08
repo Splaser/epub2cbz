@@ -26,9 +26,11 @@ class WikiPageSummary:
 
 @dataclass
 class WikiPageData:
+    requested_title: str
     title: str
     pageid: int
     wikitext: str
+    converted_title: Optional[str] = None
     extract: Optional[str] = None
     description: Optional[str] = None
     page_url: Optional[str] = None
