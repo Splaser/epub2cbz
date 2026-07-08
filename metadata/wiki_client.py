@@ -238,6 +238,22 @@ def wiki_title_from_url(url: str) -> str:
         if title:
             return unquote(title).replace("_", " ").strip()
 
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if path_parts and path_parts[0].casefold() in {
+        "zh",
+        "zh-cn",
+        "zh-hans",
+        "zh-hant",
+        "zh-hk",
+        "zh-mo",
+        "zh-my",
+        "zh-sg",
+        "zh-tw",
+    }:
+        title = "/".join(path_parts[1:]).split("#", 1)[0]
+        if title:
+            return unquote(title).replace("_", " ").strip()
+
     raise ValueError(f"Cannot infer Wiki title from URL: {url}")
 
 
