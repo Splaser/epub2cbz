@@ -164,7 +164,12 @@ def _build_notes(wiki: WikiSeriesMetadata) -> Optional[str]:
 
 
 def _display_list(values: list[str]) -> list[str]:
-    return [_display_text(value) for value in values if _display_text(value)]
+    result = []
+    for value in values:
+        text = _display_text(value)
+        if text:
+            result.append(text)
+    return result
 
 
 def _display_text(value: Optional[str]) -> Optional[str]:

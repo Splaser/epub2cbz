@@ -66,6 +66,11 @@ def write_comicinfo_to_cbz(cbz_path: str, comicinfo: ComicInfo) -> None:
             for item in source.infolist():
                 if is_comicinfo_path(item.filename):
                     continue
+
+                if item.is_dir():
+                    target.writestr(item, b"")
+                    continue
+
                 with source.open(item) as entry:
                     target.writestr(item, entry.read())
 
