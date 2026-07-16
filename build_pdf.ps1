@@ -12,8 +12,14 @@ try {
         --noconfirm `
         --onefile `
         --name pdf_main `
-        --collect-all rapidocr `
-        --collect-all onnxruntime `
+        --collect-data rapidocr `
+        --hidden-import rapidocr.inference_engine.onnxruntime `
+        --exclude-module torch `
+        --exclude-module torchvision `
+        --exclude-module openvino `
+        --exclude-module paddle `
+        --exclude-module tensorrt `
+        --exclude-module MNN `
         --paths $root `
         pdf_main.py
 

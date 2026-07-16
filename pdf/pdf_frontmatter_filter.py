@@ -1,11 +1,15 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Iterable, List, Optional
+
+from PIL import Image
 
 
 _OCR_ENGINE = None
 _OCR_INIT_ATTEMPTED = False
+_DISCLAIMER_FINGERPRINTS = []
+_MAX_FINGERPRINTS = 32
 _DISCLAIMER_TITLES = ("免责声明", "免責聲明", "免责申明", "免責申明")
 _DISCLAIMER_CATEGORIES = {
     "copyright": ("版权归", "版權歸", "作者所有", "出版社及作者"),
@@ -23,6 +27,13 @@ class DisclaimerDetection:
     is_disclaimer: bool
     score: int
     hits: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PageFingerprint:
+    aspect_milli: int
+    difference_hash: int
+    average_hash: int
 
 
 def _get_ocr_engine():
@@ -48,6 +59,58 @@ def _get_ocr_engine():
 def _normalize_ocr_text(lines: Iterable[str]) -> str:
     text = "".join(str(line) for line in lines if line)
     return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).casefold()
+
+
+def _image_fingerprint(image_path: str) -> Optional[_PageFingerprint]:
+    try:
+        with Image.open(image_path) as image:
+            gray = image.convert("L")
+            aspect_milli = round(image.width * 1000 / max(image.height, 1))
+
+            difference = gray.resize((17, 16), Image.Resampling.LANCZOS)
+            pixels = list(difference.getdata())
+            difference_hash = 0
+            for row in range(16):
+                offset = row * 17
+                for column in range(16):
+                    difference_hash <<= 1
+                    difference_hash |= pixels[offset + column] > pixels[offset + column + 1]
+
+            averaged = gray.resize((16, 16), Image.Resampling.LANCZOS)
+            average_pixels = list(averaged.getdata())
+            average = sum(average_pixels) / len(average_pixels)
+            average_hash = 0
+            for value in average_pixels:
+                average_hash <<= 1
+                average_hash |= value >= average
+
+        return _PageFingerprint(aspect_milli, difference_hash, average_hash)
+    except Exception:
+        return None
+
+
+def _fingerprint_match(fingerprint: Optional[_PageFingerprint]) -> Optional[tuple[int, int]]:
+    if fingerprint is None:
+        return None
+
+    best_match = None
+    for known in _DISCLAIMER_FINGERPRINTS:
+        if abs(fingerprint.aspect_milli - known.aspect_milli) > 8:
+            continue
+        difference_distance = (fingerprint.difference_hash ^ known.difference_hash).bit_count()
+        average_distance = (fingerprint.average_hash ^ known.average_hash).bit_count()
+        if difference_distance <= 16 and average_distance <= 20:
+            distance = (difference_distance, average_distance)
+            if best_match is None or distance < best_match:
+                best_match = distance
+    return best_match
+
+
+def _remember_disclaimer_fingerprint(fingerprint: Optional[_PageFingerprint]) -> None:
+    if fingerprint is None or len(_DISCLAIMER_FINGERPRINTS) >= _MAX_FINGERPRINTS:
+        return
+    if _fingerprint_match(fingerprint) is None:
+        _DISCLAIMER_FINGERPRINTS.append(fingerprint)
 
 
 def detect_disclaimer_page(image_path: str) -> DisclaimerDetection:
@@ -84,8 +147,25 @@ def filter_leading_disclaimer_pages(
 ) -> List[str]:
     """Remove only consecutive disclaimer pages at the very start of a PDF."""
     remove_count = 0
+    template_only_prefix = True
     for image_path in image_paths[:max_pages]:
-        detection = detect_disclaimer_page(image_path)
+        fingerprint = _image_fingerprint(image_path)
+        template_distance = _fingerprint_match(fingerprint)
+        if template_distance is not None:
+            detection = DisclaimerDetection(
+                True,
+                0,
+                (f"template:dhash={template_distance[0]}/ahash={template_distance[1]}",),
+            )
+        else:
+            # A known disclaimer prefix was followed by an unknown page. Keep it
+            # and stop immediately instead of running OCR on every issue cover.
+            if remove_count > 0 and template_only_prefix:
+                break
+            template_only_prefix = False
+            detection = detect_disclaimer_page(image_path)
+            if detection.is_disclaimer:
+                _remember_disclaimer_fingerprint(fingerprint)
         if not detection.is_disclaimer:
             break
 

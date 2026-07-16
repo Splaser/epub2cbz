@@ -35,7 +35,15 @@ build_onefile() {
 }
 
 build_onefile "main.py" "epub2cbz"
-build_onefile "pdf_main.py" "pdf2cbz" --collect-all rapidocr --collect-all onnxruntime
+build_onefile "pdf_main.py" "pdf2cbz" \
+    --collect-data rapidocr \
+    --hidden-import rapidocr.inference_engine.onnxruntime \
+    --exclude-module torch \
+    --exclude-module torchvision \
+    --exclude-module openvino \
+    --exclude-module paddle \
+    --exclude-module tensorrt \
+    --exclude-module MNN
 build_onefile "probing.py" "probing"
 
 echo ""

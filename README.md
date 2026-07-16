@@ -47,7 +47,7 @@ beautifulsoup4
 
 ```bash
 pyinstaller --onefile --name epub2cbz main.py
-pyinstaller --onefile --name pdf2cbz --collect-all rapidocr --collect-all onnxruntime pdf_main.py
+pyinstaller --onefile --name pdf2cbz --collect-data rapidocr --hidden-import rapidocr.inference_engine.onnxruntime pdf_main.py
 ```
 
 Windows PowerShell 也可以直接运行项目内的固定打包脚本：
@@ -57,7 +57,8 @@ Windows PowerShell 也可以直接运行项目内的固定打包脚本：
 ```
 
 不要直接运行 `pyinstaller --onefile pdf_main.py`：RapidOCR 的 Python 模块虽然会被发现，
-但 `default_models.yaml` 和 ONNX 模型等数据文件不会自动包含在 EXE 中。
+但 `default_models.yaml` 和 ONNX 模型等数据文件不会自动包含在 EXE 中。固定脚本还会排除
+Torch、OpenVINO、Paddle 等未使用推理后端，避免 EXE 无谓膨胀。
 
 生成的 exe 文件可直接在 Windows 下运行。
 
@@ -104,7 +105,9 @@ Magazine/Special 类型；Volume、Number 和 Count 留空，由 Kavita 按上�
 
 PDF 转换还会对开头连续最多 3 页执行离线 OCR。只有命中免责声明标题及版权/责任等语义，
 或同时命中至少 4 类声明语义时才会删除；遇到第一张正常页后立即停止检查，避免误删正文、
-目录或编辑寄语。PDF 不运行 EPUB 使用的全书 OpenCV 垃圾页扫描。
+目录或编辑寄语。同一次批量运行中，OCR 确认过的免责声明页会记录为内存图片指纹；后续
+PDF 优先做快速相似度匹配，只有未匹配时才回退 OCR。PDF 不运行 EPUB 使用的全书 OpenCV
+垃圾页扫描。
 
 ---
 
