@@ -50,6 +50,15 @@ pyinstaller --onefile --name epub2cbz main.py
 pyinstaller --onefile --name pdf2cbz --collect-all rapidocr --collect-all onnxruntime pdf_main.py
 ```
 
+Windows PowerShell 也可以直接运行项目内的固定打包脚本：
+
+```powershell
+.\build_pdf.ps1
+```
+
+不要直接运行 `pyinstaller --onefile pdf_main.py`：RapidOCR 的 Python 模块虽然会被发现，
+但 `default_models.yaml` 和 ONNX 模型等数据文件不会自动包含在 EXE 中。
+
 生成的 exe 文件可直接在 Windows 下运行。
 
 ---

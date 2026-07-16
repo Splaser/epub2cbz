@@ -3,13 +3,9 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List
 
-try:
-    from rapidocr import RapidOCR
-except ImportError:
-    RapidOCR = None
-
 
 _OCR_ENGINE = None
+_OCR_INIT_ATTEMPTED = False
 _DISCLAIMER_TITLES = ("免责声明", "免責聲明", "免责申明", "免責申明")
 _DISCLAIMER_CATEGORIES = {
     "copyright": ("版权归", "版權歸", "作者所有", "出版社及作者"),
@@ -30,11 +26,22 @@ class DisclaimerDetection:
 
 
 def _get_ocr_engine():
-    global _OCR_ENGINE
-    if RapidOCR is None:
-        return None
-    if _OCR_ENGINE is None:
+    global _OCR_ENGINE, _OCR_INIT_ATTEMPTED
+    if _OCR_INIT_ATTEMPTED:
+        return _OCR_ENGINE
+
+    _OCR_INIT_ATTEMPTED = True
+    try:
+        # Keep RapidOCR optional and lazy. A broken PyInstaller data bundle must
+        # not prevent the PDF converter from starting or converting pages.
+        from rapidocr import RapidOCR
+
         _OCR_ENGINE = RapidOCR()
+    except Exception as exc:
+        print(
+            "WARNING: PDF front-page OCR is unavailable; "
+            f"disclaimer pages will be kept ({exc})"
+        )
     return _OCR_ENGINE
 
 
