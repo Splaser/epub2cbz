@@ -4,6 +4,7 @@ import tempfile
 import shutil
 from builder.cbz_builder import make_cbz
 from images.filter import filter_image_files
+from metadata.pdf_comicinfo import build_comicinfo_xml_for_pdf
 from .pdf_utils import build_pdf_output_cbz_name, extract_or_render_with_pymupdf
 
 
@@ -20,11 +21,17 @@ def pdf_to_cbz(pdf_path: str):
         filtered_images = filter_image_files(image_paths)
 
         # 打包 CBZ
+        output_name = build_pdf_output_cbz_name(pdf_path)
         output_cbz = os.path.join(
             os.path.dirname(pdf_path),
-            build_pdf_output_cbz_name(pdf_path),
+            output_name,
         )
-        make_cbz(filtered_images, output_cbz)
+        comicinfo_xml = build_comicinfo_xml_for_pdf(
+            pdf_path=pdf_path,
+            output_cbz_name=output_name,
+            page_count=len(filtered_images),
+        )
+        make_cbz(filtered_images, output_cbz, comicinfo_xml=comicinfo_xml)
         print(f"✅ PDF to CBZ done: {output_cbz} [{len(filtered_images)} pages]")
 
     finally:

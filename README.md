@@ -87,6 +87,10 @@ PDF 期刊文件名会转换为 Kavita 可识别的 Volume/Special 格式：
 掌机迷vol073~074.pdf   -> 掌机迷 v073-074 合刊.cbz
 ```
 
+每个 PDF 生成的 CBZ 都包含根目录 `ComicInfo.xml`。ComicInfo 记录系列名、标题、页数和
+Magazine/Special 类型；Volume、Number 和 Count 留空，由 Kavita 按上述文件名解析编号，
+避免合刊范围或副刊标记被元数据覆盖。
+
 ---
 
 ## 项目结构（模块化）
