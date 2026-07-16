@@ -1,6 +1,6 @@
-# EPUB to CBZ Converter
+# EPUB/PDF to CBZ Converter
 
-**自动将 EPUB 漫画转换为 CBZ 文件，支持拆页、过滤垃圾页和自动命名。**
+**自动将 EPUB 漫画或 PDF 图书转换为 CBZ 文件。**
 
 ---
 
@@ -13,6 +13,9 @@
 - 自动命名 CBZ 文件，保留中文漫画名 + 卷/期/特典
 - 支持期刊特刊、合刊、番外、月刊等多种格式
 - 生成 CBZ 后自动保存在 EPUB 同目录
+- 独立的 PDF 入口自动扫描当前系列目录下的 `.pdf` 文件
+- PDF 优先无损提取铺满整页的 JPEG，复杂页面回退到 300 DPI 逐页渲染
+- PDF 保留原始页序，不执行自动拆页
 
 ---
 
@@ -28,17 +31,21 @@ pip install -r requirements.txt
 
 ```
 Pillow
+PyMuPDF
 numpy
+opencv-python
+beautifulsoup4
 ```
 
 ---
 
 ## 编译 EXE
 
-使用 PyInstaller 打包成单文件 exe：
+使用 PyInstaller 分别打包 EPUB 和 PDF 入口：
 
 ```bash
-pyinstaller --onefile main.py
+pyinstaller --onefile --name epub2cbz main.py
+pyinstaller --onefile --name pdf2cbz pdf_main.py
 ```
 
 生成的 exe 文件可直接在 Windows 下运行。
@@ -47,16 +54,37 @@ pyinstaller --onefile main.py
 
 ## 使用方法
 
-1. 将 `main.exe` 放在 EPUB 所在目录
+### EPUB
+
+1. 将 `epub2cbz.exe` 放在 EPUB 系列目录
 2. 双击或命令行运行：
 ```bash
-main.exe
+epub2cbz.exe
 ```
 3. 程序会自动扫描当前目录的 EPUB 文件，生成 CBZ：
 
 ```
 漫画名 - 第001卷.cbz
 漫画名 - 特典.cbz
+```
+
+### PDF
+
+1. 将 `pdf2cbz.exe` 放在 PDF 系列目录，例如 `掌机迷/`
+2. 双击或命令行运行：
+
+```bash
+pdf2cbz.exe
+```
+
+3. 程序会按文件名排序转换当前目录下的全部 PDF，并将 CBZ 写回同一目录。
+
+PDF 期刊文件名会转换为 Kavita 可识别的 Volume/Special 格式：
+
+```text
+掌机迷vol037.pdf       -> 掌机迷 v037.cbz
+掌机迷vol037副刊.pdf   -> 掌机迷 SP037 副刊.cbz
+掌机迷vol073~074.pdf   -> 掌机迷 v073-074 合刊.cbz
 ```
 
 ---
@@ -66,6 +94,10 @@ main.exe
 ```
 epub2cbz/
 ├─ main.py
+├─ pdf_main.py
+├─ pdf/
+│  ├─ pdf_to_cbz.py
+│  └─ pdf_utils.py
 ├─ parser/
 │   └─ html_parser.py
 ├─ images/

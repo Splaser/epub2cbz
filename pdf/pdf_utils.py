@@ -1,68 +1,147 @@
-# pdf/pdf_utils.py
 import os
-import subprocess
+import re
 from typing import List
 
+from PIL import Image
 
 try:
-    from pdf2image import convert_from_path
+    import fitz
 except ImportError:
-    convert_from_path = None
+    fitz = None
 
-
-from utils.consts import IMG_EXT
-
-import shutil
-
-def detect_poppler_bin() -> str | None:
-    """
-    自动探测 Poppler 二进制目录
-    返回路径或 None
-    """
-    exe_name = "pdfimages.exe" if os.name == "nt" else "pdfimages"
-    path = shutil.which(exe_name)
-    if path:
-        # 返回 exe 所在的目录
-        return os.path.dirname(path)
-    return None
-
-POPPLER_BIN = detect_poppler_bin()
 
 def clean_pdf_name(name: str) -> str:
-    import re
     name = re.sub(r'\s+\d+x\d+(?:\.\d+)?\+\d+x\d+(?:\.\d+)?=\d+(?:\.\d+)?', '', name)
     name = re.sub(r'\s+', ' ', name).strip()
     return name
 
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
 
-def list_image_files(folder: str) -> List[str]:
-    files = [os.path.join(folder, f) for f in os.listdir(folder)
-             if os.path.isfile(os.path.join(folder, f)) and f.lower().endswith(IMG_EXT)]
-    files.sort()
-    return files
+_PDF_PERIODICAL_RE = re.compile(
+    r"^(?:(?:vol(?:ume)?\.?|v)\s*)?0*(\d{1,4})"
+    r"(?:\s*[~～\-–—]\s*(?:vol(?:ume)?\.?|v)?\s*0*(\d{1,4}))?"
+    r"(.*)$",
+    flags=re.IGNORECASE,
+)
+_PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊")
 
-def extract_with_pdfimages(pdf_path, temp_dir, poppler_bin=POPPLER_BIN) -> List[str]:
-    exe = "pdfimages"
-    if poppler_bin:
-        exe = os.path.join(poppler_bin, "pdfimages.exe")
-    prefix = os.path.join(temp_dir, "page")
-    pdf_path = os.path.abspath(pdf_path)
 
-    cmd = [exe, "-all", pdf_path, prefix]
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    return list_image_files(temp_dir)
+def _strip_series_prefix(stem: str, series_name: str) -> str:
+    if stem.casefold().startswith(series_name.casefold()):
+        return stem[len(series_name):].lstrip(" -_")
+    return stem
 
-def render_with_pdf2image(pdf_path, temp_dir, dpi=300, poppler_bin=POPPLER_BIN) -> List[str]:
-    if convert_from_path is None:
-        raise RuntimeError("pdf2image 未安装，且 pdfimages 提取失败。")
-    pages = convert_from_path(pdf_path, dpi=dpi, fmt="jpeg", thread_count=4, poppler_path=poppler_bin)
-    out = []
-    for i, page in enumerate(pages, start=1):
-        if page.mode != "RGB":
-            page = page.convert("RGB")
-        path = os.path.join(temp_dir, f"page-{i:04d}.jpg")
-        page.save(path, "JPEG", quality=95)
-        out.append(path)
-    return out
+
+def _clean_periodical_suffix(suffix: str, *labels: str) -> str:
+    for label in labels:
+        suffix = suffix.replace(label, "")
+    suffix = re.sub(r"\s+", " ", suffix)
+    return suffix.strip(" -_()[]【】")
+
+
+def build_pdf_output_cbz_name(pdf_path: str) -> str:
+    """Build a Kavita-friendly filename for periodical PDFs."""
+    stem = clean_pdf_name(os.path.splitext(os.path.basename(pdf_path))[0])
+    series_name = os.path.basename(os.path.dirname(os.path.abspath(pdf_path))).strip()
+    if not series_name:
+        return f"{stem}.cbz"
+
+    periodical_name = _strip_series_prefix(stem, series_name)
+    match = _PDF_PERIODICAL_RE.match(periodical_name)
+    if match is None:
+        return f"{stem}.cbz"
+
+    first_issue = int(match.group(1))
+    last_issue = int(match.group(2)) if match.group(2) else None
+    suffix = match.group(3) or ""
+
+    if last_issue is not None:
+        extra = _clean_periodical_suffix(suffix, "合刊")
+        tail = f" 合刊{f' {extra}' if extra else ''}"
+        return f"{series_name} v{first_issue:03d}-{last_issue:03d}{tail}.cbz"
+
+    special_label = next((label for label in _PDF_SPECIAL_LABELS if label in suffix), None)
+    if special_label is not None:
+        extra = _clean_periodical_suffix(suffix, special_label)
+        tail = f" {special_label}{f' {extra}' if extra else ''}"
+        return f"{series_name} SP{first_issue:03d}{tail}.cbz"
+
+    extra = _clean_periodical_suffix(suffix)
+    tail = f" {extra}" if extra else ""
+    return f"{series_name} v{first_issue:03d}{tail}.cbz"
+
+
+def _rects_match(left, right, tolerance: float = 0.1) -> bool:
+    return all(abs(a - b) <= tolerance for a, b in zip(left, right))
+
+
+def _extract_full_page_jpeg(doc, page, output_path: str) -> bool:
+    """Extract a page image only when doing so preserves the displayed page."""
+    if page.rotation != 0 or page.first_annot is not None or page.first_widget is not None:
+        return False
+
+    images = page.get_image_info(xrefs=True)
+    if len(images) != 1:
+        return False
+
+    info = images[0]
+    xref = info.get("xref", 0)
+    if xref <= 0 or info.get("has-mask", False):
+        return False
+
+    bbox = info.get("bbox")
+    transform = info.get("transform")
+    if bbox is None or transform is None or not _rects_match(bbox, page.rect):
+        return False
+
+    a, b, c, d, _, _ = transform
+    if a <= 0 or d <= 0 or abs(b) > 0.1 or abs(c) > 0.1:
+        return False
+
+    display_items = page.get_bboxlog()
+    if len(display_items) != 1:
+        return False
+    item_type, item_bbox = display_items[0]
+    if item_type != "fill-image" or not _rects_match(item_bbox, page.rect):
+        return False
+
+    extracted = doc.extract_image(xref)
+    if extracted.get("ext", "").lower() not in {"jpg", "jpeg"}:
+        return False
+
+    with open(output_path, "wb") as output_file:
+        output_file.write(extracted["image"])
+    return True
+
+
+def extract_or_render_with_pymupdf(
+    pdf_path: str,
+    temp_dir: str,
+    dpi: int = 300,
+) -> List[str]:
+    """Extract full-page JPEGs directly and render all other pages one at a time."""
+    if fitz is None:
+        raise RuntimeError("PyMuPDF 未安装，请先安装 requirements.txt 中的依赖。")
+
+    image_paths = []
+    extracted_count = 0
+    rendered_count = 0
+    with fitz.open(pdf_path) as doc:
+        for index, page in enumerate(doc, start=1):
+            path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
+            if _extract_full_page_jpeg(doc, page, path):
+                image_paths.append(path)
+                extracted_count += 1
+                continue
+
+            pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB, alpha=False)
+            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            try:
+                image.save(path, "JPEG", quality=95)
+            finally:
+                image.close()
+                pix = None
+            image_paths.append(path)
+            rendered_count += 1
+
+    print(f"  - PDF pages: extracted JPEG={extracted_count}, rendered={rendered_count}")
+    return image_paths

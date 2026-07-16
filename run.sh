@@ -33,13 +33,16 @@ build_onefile() {
 }
 
 build_onefile "main.py" "epub2cbz"
+build_onefile "pdf_main.py" "pdf2cbz"
 build_onefile "probing.py" "probing"
 
 echo ""
 echo "Binaries created:"
 echo "  $DIST_DIR/epub2cbz"
+echo "  $DIST_DIR/pdf2cbz"
 echo "  $DIST_DIR/probing"
 echo ""
 echo "Run examples:"
-echo "  $DIST_DIR/epub2cbz <your.epub>"
+echo "  cd <epub-series-dir> && $DIST_DIR/epub2cbz"
+echo "  cd <pdf-series-dir> && $DIST_DIR/pdf2cbz"
 echo "  cd <image-dir> && $DIST_DIR/probing"
