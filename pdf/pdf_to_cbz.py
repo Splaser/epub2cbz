@@ -9,6 +9,12 @@ from .pdf_utils import build_pdf_output_cbz_name, extract_or_render_with_pymupdf
 
 
 def pdf_to_cbz(pdf_path: str):
+    output_name = build_pdf_output_cbz_name(pdf_path)
+    output_cbz = os.path.join(os.path.dirname(pdf_path), output_name)
+    if os.path.isfile(output_cbz):
+        print(f"SKIP: CBZ already exists: {output_cbz}")
+        return
+
     temp_dir = tempfile.mkdtemp(prefix="pdf2cbz_")
     try:
         # 优先无损提取铺满整页的 JPEG，复杂页面回退为逐页渲染。
@@ -21,11 +27,6 @@ def pdf_to_cbz(pdf_path: str):
         filtered_images = filter_leading_disclaimer_pages(image_paths, max_pages=3)
 
         # 打包 CBZ
-        output_name = build_pdf_output_cbz_name(pdf_path)
-        output_cbz = os.path.join(
-            os.path.dirname(pdf_path),
-            output_name,
-        )
         comicinfo_xml = build_comicinfo_xml_for_pdf(
             pdf_path=pdf_path,
             output_cbz_name=output_name,

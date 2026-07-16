@@ -18,8 +18,8 @@ def clean_pdf_name(name: str) -> str:
 
 
 _PDF_PERIODICAL_RE = re.compile(
-    r"^(?:(?:vol(?:ume)?\.?|v)\s*)?0*(\d{1,4})"
-    r"(?:\s*[~～\-–—]\s*(?:vol(?:ume)?\.?|v)?\s*0*(\d{1,4}))?"
+    r"^(?:(?:vol(?:ume)?\.?|v)\s*)?0*(\d{1,3})(?!\d)"
+    r"(?:\s*[~～\-–—]\s*(?:vol(?:ume)?\.?|v)?\s*0*(\d{1,3})(?!\d))?"
     r"(.*)$",
     flags=re.IGNORECASE,
 )
@@ -28,7 +28,40 @@ _PDF_ISSUE_YEAR_MONTH_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊", "别册", "別冊")
+_PDF_SPECIAL_KEYWORDS = _PDF_SPECIAL_LABELS + (
+    "图文攻略",
+    "圖文攻略",
+    "攻略",
+    "攻略本",
+    "完全攻略",
+    "攻略专辑",
+    "攻略專輯",
+    "典藏",
+    "珍藏",
+    "纪念",
+    "紀念",
+    "周年",
+    "週年",
+    "专门志",
+    "专门誌",
+    "專門志",
+    "專門誌",
+    "之书",
+    "之書",
+    "档案",
+    "檔案",
+    "大全",
+    "特辑",
+    "特輯",
+    "专辑",
+    "專輯",
+)
 _PDF_MAIN_ISSUE_SUFFIXES = ("补完", "補完")
+_PDF_EXPLICIT_VOLUME_PREFIX_RE = re.compile(
+    r"^(?:vol(?:ume)?\.?|v)\s*0*\d{1,3}(?!\d)",
+    flags=re.IGNORECASE,
+)
+_PDF_THREE_DIGIT_ISSUE_PREFIX_RE = re.compile(r"^\d{3}(?!\d)")
 
 
 def _strip_series_prefix(stem: str, series_name: str) -> str:
@@ -63,6 +96,18 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{stem}.cbz"
 
     periodical_name = _strip_series_prefix(stem, series_name)
+    special_keyword = next(
+        (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
+        None,
+    )
+    has_special_issue_index = bool(
+        _PDF_EXPLICIT_VOLUME_PREFIX_RE.match(periodical_name)
+        or _PDF_THREE_DIGIT_ISSUE_PREFIX_RE.match(periodical_name)
+    )
+    if special_keyword is not None and not has_special_issue_index:
+        special_title = _clean_periodical_suffix(periodical_name)
+        return f"{series_name} SP000 {special_title}.cbz"
+
     dated_issue = _PDF_ISSUE_YEAR_MONTH_RE.match(periodical_name)
     if dated_issue is not None:
         periodical_name = dated_issue.group("issue") + dated_issue.group("suffix")
@@ -80,9 +125,12 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{series_name} v{first_issue:03d}-{last_issue:03d}{tail}.cbz"
 
     special_label = next((label for label in _PDF_SPECIAL_LABELS if label in suffix), None)
-    if special_label is not None:
-        extra = _clean_periodical_suffix(suffix, special_label)
-        tail = f" {special_label}{f' {extra}' if extra else ''}"
+    if special_label is not None or special_keyword is not None:
+        labels_to_remove = (special_label,) if special_label is not None else ()
+        extra = _clean_periodical_suffix(suffix, *labels_to_remove)
+        label = special_label or ""
+        tail = " ".join(part for part in (label, extra) if part)
+        tail = f" {tail}" if tail else ""
         return f"{series_name} SP{first_issue:03d}{tail}.cbz"
 
     extra = _clean_periodical_suffix(suffix)

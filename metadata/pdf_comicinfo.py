@@ -30,17 +30,21 @@ def build_comicinfo_xml_for_pdf(
         first_issue = int(match.group("first"))
         last_issue = int(match.group("last")) if match.group("last") else None
         label = (match.group("label") or "").strip()
+        is_special = match.group("kind").casefold() == "sp"
 
-        if last_issue is not None:
+        if is_special and first_issue == 0 and label:
+            title = label
+        elif last_issue is not None:
             title = f"第{first_issue:03d}-{last_issue:03d}期"
         else:
             title = f"第{first_issue:03d}期"
 
         if label:
-            title = f"{title} {label}"
+            if not (is_special and first_issue == 0):
+                title = f"{title} {label}"
             tags.append(label)
 
-        if match.group("kind").casefold() == "sp":
+        if is_special:
             format_name = "Special"
 
     comicinfo = ComicInfo(
