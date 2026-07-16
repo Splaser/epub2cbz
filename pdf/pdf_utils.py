@@ -1,5 +1,8 @@
 import os
 import re
+import shutil
+import subprocess
+import sys
 from collections import Counter
 from typing import List
 
@@ -9,6 +12,16 @@ try:
     import fitz
 except ImportError:
     fitz = None
+else:
+    # Damaged scans can emit thousands of MuPDF diagnostics to stderr while a
+    # usable page or fallback is still available. Report recovery counts once
+    # per book instead of flooding the console.
+    fitz.TOOLS.mupdf_display_errors(False)
+
+try:
+    import pypdfium2 as pdfium
+except ImportError:
+    pdfium = None
 
 
 def clean_pdf_name(name: str) -> str:
@@ -239,6 +252,96 @@ def _page_render_dpi(page, default_dpi: int) -> int:
     return default_dpi
 
 
+def image_is_nearly_white(image: Image.Image) -> bool:
+    """Detect MuPDF's silent all-white failure without rejecting normal white pages."""
+    gray = image.convert("L").resize((64, 64), Image.Resampling.BILINEAR)
+    try:
+        low, high = gray.getextrema()
+        pixels = list(gray.getdata())
+        mean = sum(pixels) / len(pixels)
+        return mean >= 250 and (high - low <= 5 or gray.entropy() < 0.25)
+    finally:
+        gray.close()
+
+
+def _find_pdftoppm() -> str | None:
+    if getattr(sys, "frozen", False):
+        bundled = os.path.join(sys._MEIPASS, "poppler", "pdftoppm.exe")
+        if os.path.isfile(bundled):
+            return bundled
+    configured = os.environ.get("PDFTOPPM_PATH")
+    if configured and os.path.isfile(configured):
+        return configured
+    return shutil.which("pdftoppm") or shutil.which("pdftoppm.exe")
+
+
+def _render_with_pdfium(pdfium_doc, page_index: int, dpi: int, output_path: str) -> bool:
+    if pdfium_doc is None:
+        return False
+    page = bitmap = image = None
+    try:
+        page = pdfium_doc[page_index]
+        bitmap = page.render(scale=dpi / 72.0)
+        image = bitmap.to_pil().convert("RGB")
+        image.save(output_path, "JPEG", quality=95)
+        return not image_is_nearly_white(image)
+    except Exception:
+        return False
+    finally:
+        if image is not None:
+            image.close()
+        if bitmap is not None:
+            bitmap.close()
+        if page is not None:
+            page.close()
+
+
+def _render_with_poppler(
+    pdftoppm: str | None,
+    pdf_path: str,
+    page_number: int,
+    dpi: int,
+    output_path: str,
+) -> bool:
+    if pdftoppm is None:
+        return False
+
+    output_base = os.path.splitext(output_path)[0] + "-poppler"
+    generated_path = output_base + ".jpg"
+    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        completed = subprocess.run(
+            [
+                pdftoppm,
+                "-f", str(page_number),
+                "-l", str(page_number),
+                "-singlefile",
+                "-r", str(dpi),
+                "-jpeg",
+                "-jpegopt", "quality=95",
+                pdf_path,
+                output_base,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creation_flags,
+            timeout=120,
+            check=False,
+        )
+        if completed.returncode != 0 or not os.path.isfile(generated_path):
+            return False
+        os.replace(generated_path, output_path)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        if os.path.isfile(generated_path):
+            os.remove(generated_path)
+
+
 def extract_or_render_with_pymupdf(
     pdf_path: str,
     temp_dir: str,
@@ -252,6 +355,11 @@ def extract_or_render_with_pymupdf(
     extracted_count = 0
     rendered_count = 0
     rendered_dpis = Counter()
+    pdfium_count = 0
+    poppler_count = 0
+    pdfium_doc = None
+    pdfium_open_attempted = False
+    pdftoppm = _find_pdftoppm()
     with fitz.open(pdf_path) as doc:
         for index, page in enumerate(doc, start=1):
             path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
@@ -265,9 +373,29 @@ def extract_or_render_with_pymupdf(
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             try:
                 image.save(path, "JPEG", quality=95)
+                suspicious_white = image_is_nearly_white(image)
             finally:
                 image.close()
                 pix = None
+
+            if suspicious_white:
+                if not pdfium_open_attempted:
+                    pdfium_open_attempted = True
+                    if pdfium is not None:
+                        try:
+                            pdfium_doc = pdfium.PdfDocument(pdf_path)
+                        except Exception:
+                            pdfium_doc = None
+
+                if _render_with_pdfium(pdfium_doc, index - 1, render_dpi, path):
+                    pdfium_count += 1
+                elif _render_with_poppler(pdftoppm, pdf_path, index, render_dpi, path):
+                    poppler_count += 1
+                else:
+                    raise RuntimeError(
+                        f"page {index} rendered nearly white in PyMuPDF and "
+                        "could not be recovered by PDFium/Poppler"
+                    )
             image_paths.append(path)
             rendered_count += 1
             rendered_dpis[render_dpi] += 1
@@ -276,5 +404,8 @@ def extract_or_render_with_pymupdf(
     print(
         f"  - PDF pages: extracted JPEG={extracted_count}, rendered={rendered_count}"
         f"{f' ({dpi_summary})' if dpi_summary else ''}"
+        f"{f', recovered PDFium={pdfium_count}, Poppler={poppler_count}' if pdfium_count or poppler_count else ''}"
     )
+    if pdfium_doc is not None:
+        pdfium_doc.close()
     return image_paths

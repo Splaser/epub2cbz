@@ -1,9 +1,27 @@
 param(
-    [string]$Python = "python"
+    [string]$Python = "python",
+    [string]$PopplerBin = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+if (-not $PopplerBin) {
+    $bundledRuntime = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\native\poppler\Library\bin"
+    if (Test-Path (Join-Path $bundledRuntime "pdftoppm.exe")) {
+        $PopplerBin = $bundledRuntime
+    }
+    else {
+        $pdftoppm = Get-Command pdftoppm.exe -ErrorAction SilentlyContinue
+        if ($pdftoppm) {
+            $PopplerBin = Split-Path -Parent $pdftoppm.Source
+        }
+    }
+}
+
+if (-not $PopplerBin -or -not (Test-Path (Join-Path $PopplerBin "pdftoppm.exe"))) {
+    throw "Poppler pdftoppm.exe not found. Pass -PopplerBin <directory>."
+}
 
 Push-Location $root
 try {
@@ -13,6 +31,8 @@ try {
         --onefile `
         --name pdf_main `
         --collect-data rapidocr `
+        --collect-all pypdfium2 `
+        --add-binary "$PopplerBin\*;poppler" `
         --hidden-import rapidocr.inference_engine.onnxruntime `
         --exclude-module torch `
         --exclude-module torchvision `
