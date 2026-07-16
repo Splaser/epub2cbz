@@ -23,7 +23,12 @@ _PDF_PERIODICAL_RE = re.compile(
     r"(.*)$",
     flags=re.IGNORECASE,
 )
-_PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊")
+_PDF_ISSUE_YEAR_MONTH_RE = re.compile(
+    r"^(?P<issue>\d{3})\s+(?:19|20)\d{2}\.(?:0[1-9]|1[0-2])(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
+_PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊", "别册", "別冊")
+_PDF_MAIN_ISSUE_SUFFIXES = ("补完", "補完")
 
 
 def _strip_series_prefix(stem: str, series_name: str) -> str:
@@ -42,11 +47,12 @@ def _strip_series_prefix(stem: str, series_name: str) -> str:
 def _clean_periodical_suffix(suffix: str, *labels: str) -> str:
     for label in labels:
         suffix = suffix.replace(label, "")
+    suffix = re.sub(r"_+", " ", suffix)
     # A counter immediately following the parsed issue number/range belongs to
     # the number itself, not to the human-readable edition note.
     suffix = re.sub(r"^\s*(?:辑|輯|期|册|冊)\s*", "", suffix)
     suffix = re.sub(r"\s+", " ", suffix)
-    return suffix.strip(" -_()[]【】")
+    return suffix.strip(" .·・-_()[]【】")
 
 
 def build_pdf_output_cbz_name(pdf_path: str) -> str:
@@ -57,6 +63,9 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{stem}.cbz"
 
     periodical_name = _strip_series_prefix(stem, series_name)
+    dated_issue = _PDF_ISSUE_YEAR_MONTH_RE.match(periodical_name)
+    if dated_issue is not None:
+        periodical_name = dated_issue.group("issue") + dated_issue.group("suffix")
     match = _PDF_PERIODICAL_RE.match(periodical_name)
     if match is None:
         return f"{stem}.cbz"
@@ -77,6 +86,8 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{series_name} SP{first_issue:03d}{tail}.cbz"
 
     extra = _clean_periodical_suffix(suffix)
+    if extra in _PDF_MAIN_ISSUE_SUFFIXES:
+        extra = ""
     tail = f" {extra}" if extra else ""
     return f"{series_name} v{first_issue:03d}{tail}.cbz"
 
