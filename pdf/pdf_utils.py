@@ -42,6 +42,9 @@ def _strip_series_prefix(stem: str, series_name: str) -> str:
 def _clean_periodical_suffix(suffix: str, *labels: str) -> str:
     for label in labels:
         suffix = suffix.replace(label, "")
+    # A counter immediately following the parsed issue number/range belongs to
+    # the number itself, not to the human-readable edition note.
+    suffix = re.sub(r"^\s*(?:辑|輯|期|册|冊)\s*", "", suffix)
     suffix = re.sub(r"\s+", " ", suffix)
     return suffix.strip(" -_()[]【】")
 
