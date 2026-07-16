@@ -17,19 +17,23 @@ def clean_pdf_name(name: str) -> str:
     return name
 
 
+_PDF_MAX_ISSUE = 1500
 _PDF_PERIODICAL_RE = re.compile(
-    r"^(?:(?:vol(?:ume)?\.?|v)\s*)?0*(\d{1,3})(?!\d)"
-    r"(?:\s*[~～\-–—]\s*(?:vol(?:ume)?\.?|v)?\s*0*(\d{1,3})(?!\d))?"
+    r"^(?:(?:vol(?:ume)?\.?|v)\s*)?0*(\d{1,4})(?!\d)"
+    r"(?:\s*[~～\-–—]\s*(?:vol(?:ume)?\.?|v)?\s*0*(\d{1,4})(?!\d))?"
     r"(.*)$",
     flags=re.IGNORECASE,
 )
 _PDF_EMBEDDED_VOLUME_RE = re.compile(
-    r"\bvol(?:ume)?\.?\s*0*(?P<issue>\d{1,3})(?!\d)(?P<suffix>.*)$",
+    r"\bvol(?:ume)?\.?\s*0*(?P<issue>\d{1,4})(?!\d)(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
 _PDF_ISSUE_PUBLICATION_RE = re.compile(
-    r"^(?P<issue>\d{3}(?:\s*[~～\-–—]\s*\d{3})?)"
-    r"\s+\(?(?:19|20)\d{2}\.(?:0?[1-9]|1[0-2])(?:AB|A|B)?\)?"
+    r"^(?P<issue>\d{3,4}(?:\s*[~～\-–—]\s*\d{3,4})?)"
+    # Put 10-12 before 1-9 so the regex cannot leave the final month digit in
+    # the suffix (e.g. 011 + 1999.10 used to become 0110, then v110).
+    # A combined issue may concatenate publication slots, e.g. 2003.2B3A.
+    r"\s+\(?(?:19|20)\d{2}\.(?:(?:1[0-2]|0?[1-9])(?:AB|A|B)?)+\)?"
     r"(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
@@ -68,10 +72,10 @@ _PDF_SPECIAL_KEYWORDS = _PDF_SPECIAL_LABELS + (
 )
 _PDF_MAIN_ISSUE_SUFFIXES = ("补完", "補完")
 _PDF_EXPLICIT_VOLUME_PREFIX_RE = re.compile(
-    r"^(?:vol(?:ume)?\.?|v)\s*0*\d{1,3}(?!\d)",
+    r"^(?:vol(?:ume)?\.?|v)\s*0*(?P<issue>\d{1,4})(?!\d)",
     flags=re.IGNORECASE,
 )
-_PDF_THREE_DIGIT_ISSUE_PREFIX_RE = re.compile(r"^\d{3}(?!\d)")
+_PDF_NUMBERED_ISSUE_PREFIX_RE = re.compile(r"^0*(?P<issue>\d{1,4})(?!\d)")
 
 
 def _strip_series_prefix(stem: str, series_name: str) -> str:
@@ -109,7 +113,8 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
     embedded_volume = _PDF_EMBEDDED_VOLUME_RE.search(periodical_name)
     if embedded_volume is not None:
         issue = int(embedded_volume.group("issue"))
-        periodical_name = f"{issue:03d}" + embedded_volume.group("suffix")
+        if issue <= _PDF_MAX_ISSUE:
+            periodical_name = f"{issue:03d}" + embedded_volume.group("suffix")
 
     periodical_name = _PDF_RELEASE_GROUP_SUFFIX_RE.sub("", periodical_name)
     publication = _PDF_ISSUE_PUBLICATION_RE.match(periodical_name)
@@ -120,9 +125,13 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
         None,
     )
-    has_special_issue_index = bool(
+    numbered_prefix = (
         _PDF_EXPLICIT_VOLUME_PREFIX_RE.match(periodical_name)
-        or _PDF_THREE_DIGIT_ISSUE_PREFIX_RE.match(periodical_name)
+        or _PDF_NUMBERED_ISSUE_PREFIX_RE.match(periodical_name)
+    )
+    has_special_issue_index = bool(
+        numbered_prefix
+        and int(numbered_prefix.group("issue")) <= _PDF_MAX_ISSUE
     )
     if special_keyword is not None and not has_special_issue_index:
         special_title = _clean_periodical_suffix(periodical_name)
@@ -135,6 +144,11 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
     first_issue = int(match.group(1))
     last_issue = int(match.group(2)) if match.group(2) else None
     suffix = match.group(3) or ""
+
+    if first_issue > _PDF_MAX_ISSUE or (
+        last_issue is not None and last_issue > _PDF_MAX_ISSUE
+    ):
+        return f"{stem}.cbz"
 
     if last_issue is not None:
         extra = _clean_periodical_suffix(suffix, "合刊")
