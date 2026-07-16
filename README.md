@@ -105,6 +105,8 @@ PDF 期刊文件名会转换为 Kavita 可识别的 Volume/Special 格式：
 按 Special 处理。有明确 `VOL`/三位总编号时使用该编号；无主刊编号或开头只是年份时使用
 `SP000` 并保留原标题。
 主刊或有编号特刊只接受 1–999 的期号；更大数字（如 2002）不作为总编号解析。
+`UCG Vol.029` 这类系列别名会回落到当前文件夹作为系列名；主刊文件名中的年月、A/B/AB
+分期标记以及 `CRAZ/full_CRAZ` 发布组标记不写入 CBZ 名称，只保留总编号。
 
 每个 PDF 生成的 CBZ 都包含根目录 `ComicInfo.xml`。ComicInfo 记录系列名、标题、页数和
 Magazine/Special 类型；Volume、Number 和 Count 留空，由 Kavita 按上述文件名解析编号，

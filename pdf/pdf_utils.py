@@ -23,8 +23,18 @@ _PDF_PERIODICAL_RE = re.compile(
     r"(.*)$",
     flags=re.IGNORECASE,
 )
-_PDF_ISSUE_YEAR_MONTH_RE = re.compile(
-    r"^(?P<issue>\d{3})\s+(?:19|20)\d{2}\.(?:0[1-9]|1[0-2])(?P<suffix>.*)$",
+_PDF_EMBEDDED_VOLUME_RE = re.compile(
+    r"\bvol(?:ume)?\.?\s*0*(?P<issue>\d{1,3})(?!\d)(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
+_PDF_ISSUE_PUBLICATION_RE = re.compile(
+    r"^(?P<issue>\d{3}(?:\s*[~～\-–—]\s*\d{3})?)"
+    r"\s+\(?(?:19|20)\d{2}\.(?:0?[1-9]|1[0-2])(?:AB|A|B)?\)?"
+    r"(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
+_PDF_RELEASE_GROUP_PREFIX_RE = re.compile(
+    r"^[\s_.-]*(?:full[\s_.-]*)?CRAZ(?=$|[\s_.-])",
     flags=re.IGNORECASE,
 )
 _PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊", "别册", "別冊")
@@ -96,6 +106,15 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{stem}.cbz"
 
     periodical_name = _strip_series_prefix(stem, series_name)
+    embedded_volume = _PDF_EMBEDDED_VOLUME_RE.search(periodical_name)
+    if embedded_volume is not None:
+        periodical_name = embedded_volume.group("issue") + embedded_volume.group("suffix")
+
+    publication = _PDF_ISSUE_PUBLICATION_RE.match(periodical_name)
+    if publication is not None:
+        suffix = _PDF_RELEASE_GROUP_PREFIX_RE.sub("", publication.group("suffix"))
+        periodical_name = publication.group("issue") + suffix
+
     special_keyword = next(
         (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
         None,
@@ -108,9 +127,6 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         special_title = _clean_periodical_suffix(periodical_name)
         return f"{series_name} SP000 {special_title}.cbz"
 
-    dated_issue = _PDF_ISSUE_YEAR_MONTH_RE.match(periodical_name)
-    if dated_issue is not None:
-        periodical_name = dated_issue.group("issue") + dated_issue.group("suffix")
     match = _PDF_PERIODICAL_RE.match(periodical_name)
     if match is None:
         return f"{stem}.cbz"
