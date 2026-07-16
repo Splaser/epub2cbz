@@ -33,8 +33,8 @@ _PDF_ISSUE_PUBLICATION_RE = re.compile(
     r"(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
-_PDF_RELEASE_GROUP_PREFIX_RE = re.compile(
-    r"^[\s_.-]*(?:full[\s_.-]*)?CRAZ(?=$|[\s_.-])",
+_PDF_RELEASE_GROUP_SUFFIX_RE = re.compile(
+    r"[\s_.-]*(?:full[\s_.-]*)?CRAZ\s*$",
     flags=re.IGNORECASE,
 )
 _PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊", "别册", "別冊")
@@ -108,12 +108,13 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
     periodical_name = _strip_series_prefix(stem, series_name)
     embedded_volume = _PDF_EMBEDDED_VOLUME_RE.search(periodical_name)
     if embedded_volume is not None:
-        periodical_name = embedded_volume.group("issue") + embedded_volume.group("suffix")
+        issue = int(embedded_volume.group("issue"))
+        periodical_name = f"{issue:03d}" + embedded_volume.group("suffix")
 
+    periodical_name = _PDF_RELEASE_GROUP_SUFFIX_RE.sub("", periodical_name)
     publication = _PDF_ISSUE_PUBLICATION_RE.match(periodical_name)
     if publication is not None:
-        suffix = _PDF_RELEASE_GROUP_PREFIX_RE.sub("", publication.group("suffix"))
-        periodical_name = publication.group("issue") + suffix
+        periodical_name = publication.group("issue") + publication.group("suffix")
 
     special_keyword = next(
         (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
