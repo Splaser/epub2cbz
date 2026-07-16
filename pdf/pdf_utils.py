@@ -1,5 +1,6 @@
 import os
 import re
+from collections import Counter
 from typing import List
 
 from PIL import Image
@@ -26,8 +27,15 @@ _PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊")
 
 
 def _strip_series_prefix(stem: str, series_name: str) -> str:
-    if stem.casefold().startswith(series_name.casefold()):
-        return stem[len(series_name):].lstrip(" -_")
+    prefixes = (
+        series_name,
+        f"《{series_name}》",
+        f"【{series_name}】",
+        f"[{series_name}]",
+    )
+    for prefix in prefixes:
+        if stem.casefold().startswith(prefix.casefold()):
+            return stem[len(prefix):].lstrip(" -_")
     return stem
 
 
@@ -113,6 +121,31 @@ def _extract_full_page_jpeg(doc, page, output_path: str) -> bool:
     return True
 
 
+def _page_render_dpi(page, default_dpi: int) -> int:
+    """Avoid upscaling a full-page scan when rendering overlays on top of it."""
+    for info in page.get_image_info(xrefs=True):
+        bbox = info.get("bbox")
+        transform = info.get("transform")
+        width = info.get("width", 0)
+        height = info.get("height", 0)
+        if bbox is None or transform is None or width <= 0 or height <= 0:
+            continue
+        if not _rects_match(bbox, page.rect):
+            continue
+
+        a, b, c, d, _, _ = transform
+        if a <= 0 or d <= 0 or abs(b) > 0.1 or abs(c) > 0.1:
+            continue
+
+        dpi_x = width * 72.0 / max(page.rect.width, 1.0)
+        dpi_y = height * 72.0 / max(page.rect.height, 1.0)
+        effective_dpi = int(round(max(dpi_x, dpi_y)))
+        if 36 <= effective_dpi <= default_dpi:
+            return effective_dpi
+
+    return default_dpi
+
+
 def extract_or_render_with_pymupdf(
     pdf_path: str,
     temp_dir: str,
@@ -125,6 +158,7 @@ def extract_or_render_with_pymupdf(
     image_paths = []
     extracted_count = 0
     rendered_count = 0
+    rendered_dpis = Counter()
     with fitz.open(pdf_path) as doc:
         for index, page in enumerate(doc, start=1):
             path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
@@ -133,7 +167,8 @@ def extract_or_render_with_pymupdf(
                 extracted_count += 1
                 continue
 
-            pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB, alpha=False)
+            render_dpi = _page_render_dpi(page, dpi)
+            pix = page.get_pixmap(dpi=render_dpi, colorspace=fitz.csRGB, alpha=False)
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             try:
                 image.save(path, "JPEG", quality=95)
@@ -142,6 +177,11 @@ def extract_or_render_with_pymupdf(
                 pix = None
             image_paths.append(path)
             rendered_count += 1
+            rendered_dpis[render_dpi] += 1
 
-    print(f"  - PDF pages: extracted JPEG={extracted_count}, rendered={rendered_count}")
+    dpi_summary = ",".join(f"{value}dpi:{count}" for value, count in sorted(rendered_dpis.items()))
+    print(
+        f"  - PDF pages: extracted JPEG={extracted_count}, rendered={rendered_count}"
+        f"{f' ({dpi_summary})' if dpi_summary else ''}"
+    )
     return image_paths

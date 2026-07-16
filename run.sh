@@ -14,6 +14,7 @@ fi
 build_onefile() {
     local entry="$1"
     local name="$2"
+    shift 2
 
     if [ ! -f "$ROOT_DIR/$entry" ]; then
         echo "ERROR: $ROOT_DIR/$entry not found." >&2
@@ -29,11 +30,12 @@ build_onefile() {
         --workpath "$BUILD_DIR" \
         --specpath "$ROOT_DIR" \
         --paths "$ROOT_DIR" \
+        "$@" \
         "$ROOT_DIR/$entry"
 }
 
 build_onefile "main.py" "epub2cbz"
-build_onefile "pdf_main.py" "pdf2cbz"
+build_onefile "pdf_main.py" "pdf2cbz" --collect-all rapidocr --collect-all onnxruntime
 build_onefile "probing.py" "probing"
 
 echo ""

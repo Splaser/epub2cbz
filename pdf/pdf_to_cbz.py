@@ -3,8 +3,8 @@ import os
 import tempfile
 import shutil
 from builder.cbz_builder import make_cbz
-from images.filter import filter_image_files
 from metadata.pdf_comicinfo import build_comicinfo_xml_for_pdf
+from .pdf_frontmatter_filter import filter_leading_disclaimer_pages
 from .pdf_utils import build_pdf_output_cbz_name, extract_or_render_with_pymupdf
 
 
@@ -14,11 +14,11 @@ def pdf_to_cbz(pdf_path: str):
         # 优先无损提取铺满整页的 JPEG，复杂页面回退为逐页渲染。
         image_paths = extract_or_render_with_pymupdf(pdf_path, temp_dir, dpi=300)
         if not image_paths:
-            print(f"❌ no pages extracted: {pdf_path}")
+            print(f"ERROR: no pages extracted: {pdf_path}")
             return
 
-        # 过滤垃圾页
-        filtered_images = filter_image_files(image_paths)
+        # PDF 不执行全书 OpenCV 垃圾页扫描，只检查开头连续的免责声明页。
+        filtered_images = filter_leading_disclaimer_pages(image_paths, max_pages=3)
 
         # 打包 CBZ
         output_name = build_pdf_output_cbz_name(pdf_path)
@@ -32,7 +32,7 @@ def pdf_to_cbz(pdf_path: str):
             page_count=len(filtered_images),
         )
         make_cbz(filtered_images, output_cbz, comicinfo_xml=comicinfo_xml)
-        print(f"✅ PDF to CBZ done: {output_cbz} [{len(filtered_images)} pages]")
+        print(f"PDF to CBZ done: {output_cbz} [{len(filtered_images)} pages]")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

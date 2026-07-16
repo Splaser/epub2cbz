@@ -32,6 +32,8 @@ pip install -r requirements.txt
 ```
 Pillow
 PyMuPDF
+rapidocr
+onnxruntime
 numpy
 opencv-python
 beautifulsoup4
@@ -45,7 +47,7 @@ beautifulsoup4
 
 ```bash
 pyinstaller --onefile --name epub2cbz main.py
-pyinstaller --onefile --name pdf2cbz pdf_main.py
+pyinstaller --onefile --name pdf2cbz --collect-all rapidocr --collect-all onnxruntime pdf_main.py
 ```
 
 生成的 exe 文件可直接在 Windows 下运行。
@@ -90,6 +92,10 @@ PDF 期刊文件名会转换为 Kavita 可识别的 Volume/Special 格式：
 每个 PDF 生成的 CBZ 都包含根目录 `ComicInfo.xml`。ComicInfo 记录系列名、标题、页数和
 Magazine/Special 类型；Volume、Number 和 Count 留空，由 Kavita 按上述文件名解析编号，
 避免合刊范围或副刊标记被元数据覆盖。
+
+PDF 转换还会对开头连续最多 3 页执行离线 OCR。只有命中免责声明标题及版权/责任等语义，
+或同时命中至少 4 类声明语义时才会删除；遇到第一张正常页后立即停止检查，避免误删正文、
+目录或编辑寄语。PDF 不运行 EPUB 使用的全书 OpenCV 垃圾页扫描。
 
 ---
 

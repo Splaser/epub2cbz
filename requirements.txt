@@ -1,5 +1,7 @@
 Pillow
 PyMuPDF
+rapidocr
+onnxruntime
 numpy
 opencv-python
 beautifulsoup4

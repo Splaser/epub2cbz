@@ -1,0 +1,92 @@
+import os
+import re
+from dataclasses import dataclass
+from typing import Iterable, List
+
+try:
+    from rapidocr import RapidOCR
+except ImportError:
+    RapidOCR = None
+
+
+_OCR_ENGINE = None
+_DISCLAIMER_TITLES = ("免责声明", "免責聲明", "免责申明", "免責申明")
+_DISCLAIMER_CATEGORIES = {
+    "copyright": ("版权归", "版權歸", "作者所有", "出版社及作者"),
+    "noncommercial": ("非盈利", "非赢利", "非營利", "商业盈利", "商業盈利", "商业目的", "商業目的"),
+    "download": ("下载资源", "下載資源", "下载后24小时", "下載後24小時", "24小时内删除", "24小時內刪除"),
+    "liability": ("法律责任", "法律責任", "后果自负", "後果自負", "不承担", "不承擔"),
+    "learning": ("交流学习", "交流學習", "学习之用", "學習之用", "阅读学习", "閱讀學習"),
+    "piracy": ("盗版", "盜版", "购买正版", "購買正版", "请购买正版", "請購買正版"),
+    "infringement": ("权利造成了侵犯", "權利造成了侵犯", "侵权", "侵權", "撤销相关内容", "撤銷相關內容"),
+}
+
+
+@dataclass(frozen=True)
+class DisclaimerDetection:
+    is_disclaimer: bool
+    score: int
+    hits: tuple[str, ...]
+
+
+def _get_ocr_engine():
+    global _OCR_ENGINE
+    if RapidOCR is None:
+        return None
+    if _OCR_ENGINE is None:
+        _OCR_ENGINE = RapidOCR()
+    return _OCR_ENGINE
+
+
+def _normalize_ocr_text(lines: Iterable[str]) -> str:
+    text = "".join(str(line) for line in lines if line)
+    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).casefold()
+
+
+def detect_disclaimer_page(image_path: str) -> DisclaimerDetection:
+    engine = _get_ocr_engine()
+    if engine is None:
+        return DisclaimerDetection(False, 0, ("ocr-unavailable",))
+
+    try:
+        result = engine(image_path)
+        lines = getattr(result, "txts", None) or ()
+        scores = getattr(result, "scores", None) or ()
+        if scores and len(scores) == len(lines):
+            lines = [line for line, confidence in zip(lines, scores) if confidence >= 0.55]
+        text = _normalize_ocr_text(lines)
+    except Exception as exc:
+        return DisclaimerDetection(False, 0, (f"ocr-error:{exc}",))
+
+    title_hit = next((phrase for phrase in _DISCLAIMER_TITLES if phrase.casefold() in text), None)
+    category_hits = []
+    for category, phrases in _DISCLAIMER_CATEGORIES.items():
+        if any(phrase.casefold() in text for phrase in phrases):
+            category_hits.append(category)
+
+    score = (4 if title_hit else 0) + len(category_hits)
+    is_disclaimer = (title_hit is not None and len(category_hits) >= 1) or len(category_hits) >= 4
+    hits = ([f"title:{title_hit}"] if title_hit else []) + category_hits
+    return DisclaimerDetection(is_disclaimer, score, tuple(hits))
+
+
+def filter_leading_disclaimer_pages(
+    image_paths: List[str],
+    *,
+    max_pages: int = 3,
+) -> List[str]:
+    """Remove only consecutive disclaimer pages at the very start of a PDF."""
+    remove_count = 0
+    for image_path in image_paths[:max_pages]:
+        detection = detect_disclaimer_page(image_path)
+        if not detection.is_disclaimer:
+            break
+
+        print(
+            "  - skip [pdf-front-disclaimer:"
+            f"score={detection.score} hits={','.join(detection.hits)}] "
+            f"{os.path.basename(image_path)}"
+        )
+        remove_count += 1
+
+    return image_paths[remove_count:]
