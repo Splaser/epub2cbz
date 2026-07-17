@@ -32,6 +32,7 @@ pip install -r requirements.txt
 ```
 Pillow
 PyMuPDF
+pypdfium2
 rapidocr
 onnxruntime
 numpy
@@ -43,11 +44,10 @@ beautifulsoup4
 
 ## 编译 EXE
 
-使用 PyInstaller 分别打包 EPUB 和 PDF 入口：
+使用 PyInstaller 打包 EPUB 入口：
 
 ```bash
 pyinstaller --onefile --name epub2cbz main.py
-pyinstaller --onefile --name pdf2cbz --collect-data rapidocr --hidden-import rapidocr.inference_engine.onnxruntime pdf_main.py
 ```
 
 Windows PowerShell 也可以直接运行项目内的固定打包脚本：
@@ -56,9 +56,9 @@ Windows PowerShell 也可以直接运行项目内的固定打包脚本：
 .\build_pdf.ps1
 ```
 
-不要直接运行 `pyinstaller --onefile pdf_main.py`：RapidOCR 的 Python 模块虽然会被发现，
+PDF 入口请使用固定脚本，不要直接运行 `pyinstaller --onefile pdf_main.py`：RapidOCR 的 Python 模块虽然会被发现，
 但 `default_models.yaml` 和 ONNX 模型等数据文件不会自动包含在 EXE 中。固定脚本还会排除
-Torch、OpenVINO、Paddle 等未使用推理后端，避免 EXE 无谓膨胀。
+Torch、OpenVINO、Paddle 等未使用推理后端，并打包 PDFium 与 Poppler 备用渲染器。
 
 生成的 exe 文件可直接在 Windows 下运行。
 
@@ -90,7 +90,11 @@ pdf2cbz.exe
 ```
 
 3. 程序会按文件名排序转换当前目录下的全部 PDF，并将 CBZ 写回同一目录。
-   如果按当前命名规则计算出的同名 CBZ 已存在，则在解码 PDF 前直接跳过。
+   如果同名 CBZ 已存在且封面正常，则在解码 PDF 前直接跳过；空白或损坏封面的旧 CBZ
+   会自动重建。需要整批无条件重建时运行 `pdf2cbz.exe --force`。
+
+PDF 页面优先由 PyMuPDF 无损提取或渲染；检测到异常纯白页时，按 PDFium、Poppler 顺序
+自动重试。只有三个渲染器都无法恢复时才将该书标记为失败，不再静默生成白页 CBZ。
 
 PDF 期刊文件名会转换为 Kavita 可识别的 Volume/Special 格式：
 

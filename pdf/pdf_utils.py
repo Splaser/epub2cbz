@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from contextlib import ExitStack
 from typing import List
 
 from PIL import Image
@@ -278,11 +279,12 @@ def _find_pdftoppm() -> str | None:
 def _render_with_pdfium(pdfium_doc, page_index: int, dpi: int, output_path: str) -> bool:
     if pdfium_doc is None:
         return False
-    page = bitmap = image = None
+    page = bitmap = source_image = image = None
     try:
         page = pdfium_doc[page_index]
         bitmap = page.render(scale=dpi / 72.0)
-        image = bitmap.to_pil().convert("RGB")
+        source_image = bitmap.to_pil()
+        image = source_image.convert("RGB")
         image.save(output_path, "JPEG", quality=95)
         return not image_is_nearly_white(image)
     except Exception:
@@ -290,6 +292,8 @@ def _render_with_pdfium(pdfium_doc, page_index: int, dpi: int, output_path: str)
     finally:
         if image is not None:
             image.close()
+        if source_image is not None:
+            source_image.close()
         if bitmap is not None:
             bitmap.close()
         if page is not None:
@@ -360,7 +364,8 @@ def extract_or_render_with_pymupdf(
     pdfium_doc = None
     pdfium_open_attempted = False
     pdftoppm = _find_pdftoppm()
-    with fitz.open(pdf_path) as doc:
+    with ExitStack() as resources:
+        doc = resources.enter_context(fitz.open(pdf_path))
         for index, page in enumerate(doc, start=1):
             path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
             if _extract_full_page_jpeg(doc, page, path):
@@ -384,6 +389,7 @@ def extract_or_render_with_pymupdf(
                     if pdfium is not None:
                         try:
                             pdfium_doc = pdfium.PdfDocument(pdf_path)
+                            resources.callback(pdfium_doc.close)
                         except Exception:
                             pdfium_doc = None
 
@@ -406,6 +412,4 @@ def extract_or_render_with_pymupdf(
         f"{f' ({dpi_summary})' if dpi_summary else ''}"
         f"{f', recovered PDFium={pdfium_count}, Poppler={poppler_count}' if pdfium_count or poppler_count else ''}"
     )
-    if pdfium_doc is not None:
-        pdfium_doc.close()
     return image_paths
