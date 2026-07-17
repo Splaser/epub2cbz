@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections import Counter
 from contextlib import ExitStack
+from statistics import median
 from typing import List
 
 from PIL import Image
@@ -23,6 +24,13 @@ try:
     import pypdfium2 as pdfium
 except ImportError:
     pdfium = None
+
+
+_DEFAULT_RENDER_LONG_EDGE = 3500
+_MAX_RENDER_LONG_EDGE = 4000
+_MIN_RENDER_LONG_EDGE = 1200
+_WEBP_QUALITY = 80
+_WEBP_METHOD = 4
 
 
 def clean_pdf_name(name: str) -> str:
@@ -228,8 +236,8 @@ def _extract_full_page_jpeg(doc, page, output_path: str) -> bool:
     return True
 
 
-def _page_render_dpi(page, default_dpi: int) -> int:
-    """Avoid upscaling a full-page scan when rendering overlays on top of it."""
+def _full_page_scan_dimensions(page) -> list[tuple[int, int]]:
+    dimensions = []
     for info in page.get_image_info(xrefs=True):
         bbox = info.get("bbox")
         transform = info.get("transform")
@@ -243,14 +251,67 @@ def _page_render_dpi(page, default_dpi: int) -> int:
         a, b, c, d, _, _ = transform
         if a <= 0 or d <= 0 or abs(b) > 0.1 or abs(c) > 0.1:
             continue
+        dimensions.append((width, height))
+    return dimensions
 
+
+def _document_render_long_edge(doc) -> int:
+    """Infer the native scan size from evenly sampled healthy PDF pages."""
+    if doc.page_count <= 0:
+        return _DEFAULT_RENDER_LONG_EDGE
+
+    sample_count = min(doc.page_count, 24)
+    if sample_count == 1:
+        page_indexes = [0]
+    else:
+        page_indexes = sorted(
+            {
+                round(index * (doc.page_count - 1) / (sample_count - 1))
+                for index in range(sample_count)
+            }
+        )
+
+    candidates = []
+    for page_index in page_indexes:
+        try:
+            dimensions = _full_page_scan_dimensions(doc[page_index])
+        except Exception:
+            continue
+        candidates.extend(
+            max(width, height)
+            for width, height in dimensions
+            if max(width, height) >= _MIN_RENDER_LONG_EDGE
+        )
+
+    if not candidates:
+        return _DEFAULT_RENDER_LONG_EDGE
+    return max(
+        _MIN_RENDER_LONG_EDGE,
+        min(_MAX_RENDER_LONG_EDGE, int(round(median(candidates)))),
+    )
+
+
+def _page_render_dpi(page, default_dpi: int, target_long_edge: int) -> int:
+    """Avoid upscaling a full-page scan when rendering overlays on top of it."""
+    page_long_edge = max(page.rect.width, page.rect.height, 1.0)
+    target_dpi = max(36, min(default_dpi, int(round(target_long_edge * 72.0 / page_long_edge))))
+    for width, height in _full_page_scan_dimensions(page):
         dpi_x = width * 72.0 / max(page.rect.width, 1.0)
         dpi_y = height * 72.0 / max(page.rect.height, 1.0)
         effective_dpi = int(round(max(dpi_x, dpi_y)))
         if 36 <= effective_dpi <= default_dpi:
-            return effective_dpi
+            return min(effective_dpi, target_dpi)
 
-    return default_dpi
+    return target_dpi
+
+
+def _save_rendered_webp(image: Image.Image, output_path: str) -> None:
+    image.save(
+        output_path,
+        "WEBP",
+        quality=_WEBP_QUALITY,
+        method=_WEBP_METHOD,
+    )
 
 
 def image_is_nearly_white(image: Image.Image) -> bool:
@@ -276,16 +337,27 @@ def _find_pdftoppm() -> str | None:
     return shutil.which("pdftoppm") or shutil.which("pdftoppm.exe")
 
 
-def _render_with_pdfium(pdfium_doc, page_index: int, dpi: int, output_path: str) -> bool:
+def _render_with_pdfium(
+    pdfium_doc,
+    page_index: int,
+    dpi: int,
+    target_long_edge: int,
+    output_path: str,
+) -> bool:
     if pdfium_doc is None:
         return False
     page = bitmap = source_image = image = None
     try:
         page = pdfium_doc[page_index]
-        bitmap = page.render(scale=dpi / 72.0)
+        page_width, page_height = page.get_size()
+        scale = min(
+            dpi / 72.0,
+            target_long_edge / max(page_width, page_height, 1.0),
+        )
+        bitmap = page.render(scale=max(scale, 0.1))
         source_image = bitmap.to_pil()
         image = source_image.convert("RGB")
-        image.save(output_path, "JPEG", quality=95)
+        _save_rendered_webp(image, output_path)
         return not image_is_nearly_white(image)
     except Exception:
         return False
@@ -304,7 +376,7 @@ def _render_with_poppler(
     pdftoppm: str | None,
     pdf_path: str,
     page_number: int,
-    dpi: int,
+    target_long_edge: int,
     output_path: str,
 ) -> bool:
     if pdftoppm is None:
@@ -314,31 +386,51 @@ def _render_with_poppler(
     generated_path = output_base + ".jpg"
     creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
-        completed = subprocess.run(
-            [
-                pdftoppm,
-                "-f", str(page_number),
-                "-l", str(page_number),
-                "-singlefile",
-                "-r", str(dpi),
-                "-jpeg",
-                "-jpegopt", "quality=95",
-                pdf_path,
-                output_base,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creation_flags,
-            timeout=120,
-            check=False,
+        # Some malformed page-tree entries crash Poppler with -scale-to but
+        # still render as a valid 1x1 blank page at a fixed DPI. Try the native
+        # size fallback before giving up, and trust a decodable output file
+        # rather than Poppler's noisy exit status.
+        sizing_options = (
+            ("-scale-to", str(target_long_edge)),
+            ("-r", "72"),
         )
-        if completed.returncode != 0 or not os.path.isfile(generated_path):
-            return False
-        os.replace(generated_path, output_path)
-        return True
+        for sizing_option in sizing_options:
+            if os.path.isfile(generated_path):
+                os.remove(generated_path)
+            subprocess.run(
+                [
+                    pdftoppm,
+                    "-f", str(page_number),
+                    "-l", str(page_number),
+                    "-singlefile",
+                    *sizing_option,
+                    "-jpeg",
+                    "-jpegopt", "quality=90",
+                    pdf_path,
+                    output_base,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creation_flags,
+                timeout=120,
+                check=False,
+            )
+            if not os.path.isfile(generated_path) or os.path.getsize(generated_path) <= 0:
+                continue
+            try:
+                with Image.open(generated_path) as source_image:
+                    image = source_image.convert("RGB")
+                    try:
+                        _save_rendered_webp(image, output_path)
+                    finally:
+                        image.close()
+                return True
+            except (OSError, ValueError):
+                continue
+        return False
     except (OSError, subprocess.SubprocessError):
         return False
     finally:
@@ -366,18 +458,20 @@ def extract_or_render_with_pymupdf(
     pdftoppm = _find_pdftoppm()
     with ExitStack() as resources:
         doc = resources.enter_context(fitz.open(pdf_path))
+        target_long_edge = _document_render_long_edge(doc)
         for index, page in enumerate(doc, start=1):
-            path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
-            if _extract_full_page_jpeg(doc, page, path):
-                image_paths.append(path)
+            jpeg_path = os.path.join(temp_dir, f"page-{index:04d}.jpg")
+            if _extract_full_page_jpeg(doc, page, jpeg_path):
+                image_paths.append(jpeg_path)
                 extracted_count += 1
                 continue
 
-            render_dpi = _page_render_dpi(page, dpi)
+            path = os.path.join(temp_dir, f"page-{index:04d}.webp")
+            render_dpi = _page_render_dpi(page, dpi, target_long_edge)
             pix = page.get_pixmap(dpi=render_dpi, colorspace=fitz.csRGB, alpha=False)
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             try:
-                image.save(path, "JPEG", quality=95)
+                _save_rendered_webp(image, path)
                 suspicious_white = image_is_nearly_white(image)
             finally:
                 image.close()
@@ -393,9 +487,21 @@ def extract_or_render_with_pymupdf(
                         except Exception:
                             pdfium_doc = None
 
-                if _render_with_pdfium(pdfium_doc, index - 1, render_dpi, path):
+                if _render_with_pdfium(
+                    pdfium_doc,
+                    index - 1,
+                    render_dpi,
+                    target_long_edge,
+                    path,
+                ):
                     pdfium_count += 1
-                elif _render_with_poppler(pdftoppm, pdf_path, index, render_dpi, path):
+                elif _render_with_poppler(
+                    pdftoppm,
+                    pdf_path,
+                    index,
+                    target_long_edge,
+                    path,
+                ):
                     poppler_count += 1
                 else:
                     raise RuntimeError(
@@ -410,6 +516,7 @@ def extract_or_render_with_pymupdf(
     print(
         f"  - PDF pages: extracted JPEG={extracted_count}, rendered={rendered_count}"
         f"{f' ({dpi_summary})' if dpi_summary else ''}"
+        f", target-long-edge={target_long_edge}px, rendered-format=WebP(q={_WEBP_QUALITY})"
         f"{f', recovered PDFium={pdfium_count}, Poppler={poppler_count}' if pdfium_count or poppler_count else ''}"
     )
     return image_paths

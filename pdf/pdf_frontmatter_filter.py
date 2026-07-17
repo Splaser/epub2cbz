@@ -122,21 +122,55 @@ def detect_disclaimer_page(image_path: str) -> DisclaimerDetection:
         result = engine(image_path)
         lines = getattr(result, "txts", None) or ()
         scores = getattr(result, "scores", None) or ()
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            boxes = ()
         if scores and len(scores) == len(lines):
-            lines = [line for line, confidence in zip(lines, scores) if confidence >= 0.55]
+            kept_indexes = [
+                index
+                for index, confidence in enumerate(scores)
+                if confidence >= 0.55
+            ]
+            lines = [lines[index] for index in kept_indexes]
+            if len(boxes) == len(scores):
+                boxes = [boxes[index] for index in kept_indexes]
         text = _normalize_ocr_text(lines)
     except Exception as exc:
         return DisclaimerDetection(False, 0, (f"ocr-error:{exc}",))
 
     title_hit = next((phrase for phrase in _DISCLAIMER_TITLES if phrase.casefold() in text), None)
+    title_in_upper_half = False
+    if title_hit is not None and len(boxes) == len(lines):
+        try:
+            with Image.open(image_path) as image:
+                image_height = max(image.height, 1)
+            normalized_title = _normalize_ocr_text((title_hit,))
+            for line, box in zip(lines, boxes):
+                if normalized_title not in _normalize_ocr_text((line,)):
+                    continue
+                title_center_y = sum(float(point[1]) for point in box) / len(box)
+                if title_center_y / image_height <= 0.55:
+                    title_in_upper_half = True
+                    break
+        except (OSError, TypeError, ValueError, IndexError):
+            title_in_upper_half = False
+
     category_hits = []
     for category, phrases in _DISCLAIMER_CATEGORIES.items():
         if any(phrase.casefold() in text for phrase in phrases):
             category_hits.append(category)
 
     score = (4 if title_hit else 0) + len(category_hits)
-    is_disclaimer = (title_hit is not None and len(category_hits) >= 1) or len(category_hits) >= 4
-    hits = ([f"title:{title_hit}"] if title_hit else []) + category_hits
+    is_disclaimer = (
+        title_hit is not None
+        and title_in_upper_half
+        and len(category_hits) >= 1
+    ) or len(category_hits) >= 4
+    title_hits = []
+    if title_hit:
+        position = "upper" if title_in_upper_half else "footer"
+        title_hits.append(f"title:{title_hit}@{position}")
+    hits = title_hits + category_hits
     return DisclaimerDetection(is_disclaimer, score, tuple(hits))
 
 
