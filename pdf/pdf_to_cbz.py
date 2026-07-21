@@ -30,7 +30,12 @@ def _cbz_cover_is_nearly_white(cbz_path: str) -> bool:
         return True
 
 
-def pdf_to_cbz(pdf_path: str, *, force: bool = False):
+def pdf_to_cbz(
+    pdf_path: str,
+    *,
+    force: bool = False,
+    filter_frontmatter: bool = True,
+):
     output_name = build_pdf_output_cbz_name(pdf_path)
     output_cbz = os.path.join(os.path.dirname(pdf_path), output_name)
     if os.path.isfile(output_cbz) and not force:
@@ -49,16 +54,20 @@ def pdf_to_cbz(pdf_path: str, *, force: bool = False):
             return
 
         # PDF 不执行全书 OpenCV 垃圾页扫描，只检查开头连续的免责声明页。
-        filtered_images = filter_leading_disclaimer_pages(image_paths, max_pages=3)
+        # 拖放到 exe 的 PDF 会关闭此选项，直接保留全部页面。
+        if filter_frontmatter:
+            output_images = filter_leading_disclaimer_pages(image_paths, max_pages=3)
+        else:
+            output_images = image_paths
 
         # 打包 CBZ
         comicinfo_xml = build_comicinfo_xml_for_pdf(
             pdf_path=pdf_path,
             output_cbz_name=output_name,
-            page_count=len(filtered_images),
+            page_count=len(output_images),
         )
-        make_cbz(filtered_images, output_cbz, comicinfo_xml=comicinfo_xml)
-        print(f"PDF to CBZ done: {output_cbz} [{len(filtered_images)} pages]")
+        make_cbz(output_images, output_cbz, comicinfo_xml=comicinfo_xml)
+        print(f"PDF to CBZ done: {output_cbz} [{len(output_images)} pages]")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

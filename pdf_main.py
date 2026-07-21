@@ -24,6 +24,15 @@ def natural_filename_key(filename: str):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convert PDFs beside this program to CBZ files.")
     parser.add_argument(
+        "pdf_paths",
+        nargs="*",
+        metavar="PDF",
+        help=(
+            "PDF file(s) dragged onto the executable; these are converted directly "
+            "without front-page detection or OCR"
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="rebuild every CBZ even when an output file already exists",
@@ -31,25 +40,46 @@ def main() -> int:
     args = parser.parse_args()
 
     base_dir = get_base_dir()
-    os.chdir(base_dir)
+    direct_mode = bool(args.pdf_paths)
+    if direct_mode:
+        # Resolve relative CLI paths before changing into the executable folder.
+        # Explorer drag-and-drop normally supplies absolute paths.
+        pdf_files = [os.path.abspath(path) for path in args.pdf_paths]
+        invalid_paths = [
+            path
+            for path in pdf_files
+            if not os.path.isfile(path) or not path.lower().endswith(".pdf")
+        ]
+        if invalid_paths:
+            for path in invalid_paths:
+                print(f"ERROR: not a PDF file: {path}")
+            return 2
+        print("Direct conversion mode: front-page detection and OCR are disabled.")
+    else:
+        pdf_files = sorted(
+            (
+                os.path.join(base_dir, filename)
+                for filename in os.listdir(base_dir)
+                if filename.lower().endswith(".pdf")
+            ),
+            key=lambda path: natural_filename_key(os.path.basename(path)),
+        )
 
-    pdf_files = sorted(
-        (
-            filename
-            for filename in os.listdir(base_dir)
-            if filename.lower().endswith(".pdf")
-        ),
-        key=natural_filename_key,
-    )
+    os.chdir(base_dir)
 
     if not pdf_files:
         print(f"No PDF files found in: {base_dir}")
         return 0
 
     failures = []
-    for filename in pdf_files:
+    for pdf_path in pdf_files:
+        filename = os.path.basename(pdf_path)
         try:
-            pdf_to_cbz(os.path.join(base_dir, filename), force=args.force)
+            pdf_to_cbz(
+                pdf_path,
+                force=args.force,
+                filter_frontmatter=not direct_mode,
+            )
         except Exception as exc:
             failures.append((filename, exc))
             print(f"ERROR: PDF conversion failed: {filename} ({exc})")
