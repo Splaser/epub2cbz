@@ -47,7 +47,7 @@ _PDF_PERIODICAL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _PDF_EMBEDDED_VOLUME_RE = re.compile(
-    r"\bvol(?:ume)?\.?\s*0*(?P<issue>\d{1,4})(?!\d)(?P<suffix>.*)$",
+    r"(?<![A-Za-z0-9])vol(?:ume)?\.?\s*0*(?P<issue>\d{1,4})(?!\d)(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
 _PDF_ISSUE_PUBLICATION_RE = re.compile(
@@ -60,12 +60,22 @@ _PDF_ISSUE_PUBLICATION_RE = re.compile(
     r"(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
+_PDF_CHINESE_NUMBERED_ISSUE_RE = re.compile(
+    r"^第\s*0*(?P<issue>\d{1,4})\s*期(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
+_PDF_FOUNDING_ISSUE_RE = re.compile(
+    r"^创刊号(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
 _PDF_RELEASE_GROUP_SUFFIX_RE = re.compile(
     r"[\s_.-]*(?:full[\s_.-]*)?CRAZ\s*$",
     flags=re.IGNORECASE,
 )
 _PDF_SPECIAL_LABELS = ("副刊", "增刊", "特刊", "别册", "別冊")
 _PDF_SPECIAL_KEYWORDS = _PDF_SPECIAL_LABELS + (
+    "试刊",
+    "試刊",
     "图文攻略",
     "圖文攻略",
     "攻略",
@@ -133,13 +143,33 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{stem}.cbz"
 
     periodical_name = _strip_series_prefix(stem, series_name)
+    special_keyword = next(
+        (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
+        None,
+    )
     embedded_volume = _PDF_EMBEDDED_VOLUME_RE.search(periodical_name)
+    if special_keyword is not None and embedded_volume is not None:
+        special_issue = int(embedded_volume.group("issue"))
+        if special_issue <= _PDF_MAX_ISSUE:
+            special_title = _clean_periodical_suffix(periodical_name)
+            return f"{series_name} SP{special_issue:03d} {special_title}.cbz"
+
     if embedded_volume is not None:
         issue = int(embedded_volume.group("issue"))
         if issue <= _PDF_MAX_ISSUE:
             periodical_name = f"{issue:03d}" + embedded_volume.group("suffix")
 
     periodical_name = _PDF_RELEASE_GROUP_SUFFIX_RE.sub("", periodical_name)
+    chinese_issue = _PDF_CHINESE_NUMBERED_ISSUE_RE.match(periodical_name)
+    founding_issue = _PDF_FOUNDING_ISSUE_RE.match(periodical_name)
+    if chinese_issue is not None:
+        periodical_name = (
+            f"{int(chinese_issue.group('issue')):03d}"
+            + chinese_issue.group("suffix")
+        )
+    elif founding_issue is not None:
+        periodical_name = "001" + founding_issue.group("suffix")
+
     publication = _PDF_ISSUE_PUBLICATION_RE.match(periodical_name)
     if publication is not None:
         periodical_name = publication.group("issue") + publication.group("suffix")
