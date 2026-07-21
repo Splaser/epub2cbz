@@ -55,7 +55,8 @@ _PDF_ISSUE_PUBLICATION_RE = re.compile(
     # Put 10-12 before 1-9 so the regex cannot leave the final month digit in
     # the suffix (e.g. 011 + 1999.10 used to become 0110, then v110).
     # A combined issue may concatenate publication slots, e.g. 2003.2B3A.
-    r"\s+\(?(?:19|20)\d{2}\.(?:(?:1[0-2]|0?[1-9])(?:AB|A|B)?)+\)?"
+    # Publication slots are not limited to A/B; scans also use letters such as C.
+    r"\s+\(?(?:19|20)\d{2}\.(?:(?:1[0-2]|0?[1-9])[A-Z]*)+\)?"
     r"(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
