@@ -11,6 +11,17 @@ _OCR_INIT_ATTEMPTED = False
 _DISCLAIMER_FINGERPRINTS = []
 _MAX_FINGERPRINTS = 32
 _DISCLAIMER_TITLES = ("免责声明", "免責聲明", "免责申明", "免責申明")
+_ADULT_WARNING_TITLES = ("警告", "WARNING")
+_ADULT_RESTRICTION_PHRASES = (
+    "年龄未满18岁",
+    "年齡未滿18歲",
+    "未满18岁",
+    "未滿18歲",
+    "未满十八岁",
+    "未滿十八歲",
+    "UNDER THE AGE OF 18",
+    "UNDER 18",
+)
 _DISCLAIMER_CATEGORIES = {
     "copyright": ("版权归", "版權歸", "作者所有", "出版社及作者"),
     "noncommercial": ("非盈利", "非赢利", "非營利", "商业盈利", "商業盈利", "商业目的", "商業目的"),
@@ -59,6 +70,29 @@ def _get_ocr_engine():
 def _normalize_ocr_text(lines: Iterable[str]) -> str:
     text = "".join(str(line) for line in lines if line)
     return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).casefold()
+
+
+def _title_is_in_upper_half(
+    title: Optional[str],
+    lines,
+    boxes,
+    image_path: str,
+) -> bool:
+    if title is None or len(boxes) != len(lines):
+        return False
+    try:
+        with Image.open(image_path) as image:
+            image_height = max(image.height, 1)
+        normalized_title = _normalize_ocr_text((title,))
+        for line, box in zip(lines, boxes):
+            if normalized_title not in _normalize_ocr_text((line,)):
+                continue
+            title_center_y = sum(float(point[1]) for point in box) / len(box)
+            if title_center_y / image_height <= 0.55:
+                return True
+    except (OSError, TypeError, ValueError, IndexError):
+        return False
+    return False
 
 
 def _image_fingerprint(image_path: str) -> Optional[_PageFingerprint]:
@@ -139,29 +173,42 @@ def detect_disclaimer_page(image_path: str) -> DisclaimerDetection:
         return DisclaimerDetection(False, 0, (f"ocr-error:{exc}",))
 
     title_hit = next((phrase for phrase in _DISCLAIMER_TITLES if phrase.casefold() in text), None)
-    title_in_upper_half = False
-    if title_hit is not None and len(boxes) == len(lines):
-        try:
-            with Image.open(image_path) as image:
-                image_height = max(image.height, 1)
-            normalized_title = _normalize_ocr_text((title_hit,))
-            for line, box in zip(lines, boxes):
-                if normalized_title not in _normalize_ocr_text((line,)):
-                    continue
-                title_center_y = sum(float(point[1]) for point in box) / len(box)
-                if title_center_y / image_height <= 0.55:
-                    title_in_upper_half = True
-                    break
-        except (OSError, TypeError, ValueError, IndexError):
-            title_in_upper_half = False
+    title_in_upper_half = _title_is_in_upper_half(title_hit, lines, boxes, image_path)
+    adult_warning_title = next(
+        (
+            phrase
+            for phrase in _ADULT_WARNING_TITLES
+            if _normalize_ocr_text((phrase,)) in text
+        ),
+        None,
+    )
+    adult_restriction_hit = next(
+        (
+            phrase
+            for phrase in _ADULT_RESTRICTION_PHRASES
+            if _normalize_ocr_text((phrase,)) in text
+        ),
+        None,
+    )
+    adult_warning_in_upper_half = _title_is_in_upper_half(
+        adult_warning_title,
+        lines,
+        boxes,
+        image_path,
+    )
 
     category_hits = []
     for category, phrases in _DISCLAIMER_CATEGORIES.items():
         if any(phrase.casefold() in text for phrase in phrases):
             category_hits.append(category)
 
-    score = (4 if title_hit else 0) + len(category_hits)
-    is_disclaimer = (
+    is_adult_warning = (
+        adult_warning_title is not None
+        and adult_warning_in_upper_half
+        and adult_restriction_hit is not None
+    )
+    score = (4 if title_hit else 0) + len(category_hits) + (6 if is_adult_warning else 0)
+    is_disclaimer = is_adult_warning or (
         title_hit is not None
         and title_in_upper_half
         and len(category_hits) >= 1
@@ -170,6 +217,11 @@ def detect_disclaimer_page(image_path: str) -> DisclaimerDetection:
     if title_hit:
         position = "upper" if title_in_upper_half else "footer"
         title_hits.append(f"title:{title_hit}@{position}")
+    if adult_warning_title:
+        position = "upper" if adult_warning_in_upper_half else "footer"
+        title_hits.append(f"adult-warning:{adult_warning_title}@{position}")
+    if adult_restriction_hit:
+        title_hits.append(f"adult-restriction:{adult_restriction_hit}")
     hits = title_hits + category_hits
     return DisclaimerDetection(is_disclaimer, score, tuple(hits))
 
