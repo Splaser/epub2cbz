@@ -1,9 +1,13 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from metadata.epub_comicinfo import load_exact_wiki_series_for_dir
+from metadata.epub_comicinfo import (
+    load_cached_wiki_series,
+    load_exact_wiki_series_for_dir,
+)
 from metadata.wiki_models import WikiMangaInfo, WikiPageData, WikiSeriesMetadata
 
 
@@ -122,6 +126,27 @@ class RelaxedWikiTitleTests(unittest.TestCase):
         self.assertEqual(result.wikibase_item, "Q123")
         self.assertEqual(result.series_sort, "JOJOLands")
         self.assertEqual(result.categories, ["日本漫畫作品"])
+
+
+class MetadataCacheVersionTests(unittest.TestCase):
+    def test_old_cache_without_date_alias_support_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "series.meta.json"
+            cache_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "series_name": "膽大黨",
+                    "metadata": {},
+                }),
+                encoding="utf-8",
+            )
+
+            result = load_cached_wiki_series(
+                cache_path,
+                expected_series_name="膽大黨",
+            )
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

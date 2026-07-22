@@ -13,7 +13,7 @@ from .wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 1
+SERIES_METADATA_CACHE_VERSION = 2
 
 
 def load_exact_wiki_series_for_dir(

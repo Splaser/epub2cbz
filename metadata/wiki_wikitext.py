@@ -31,6 +31,9 @@ EDITION_QUERY_ALIASES = {
     "文库版": ("文庫版", "文库版"),
 }
 
+START_DATE_FIELDS = ("開始", "开始", "開始日", "开始日", "發售日", "发售日")
+END_DATE_FIELDS = ("結束", "结束", "結束日", "结束日")
+
 
 def iter_templates(wikitext: str) -> list[str]:
     templates = []
@@ -346,13 +349,22 @@ def parse_manga_block(
         japan_publishers=publishers["japan"],
         magazine=split_clean_list(fields.get("連載雜誌")),
         label=clean_wiki_text(fields.get("label")),
-        start=clean_wiki_text(fields.get("開始")),
-        end=clean_wiki_text(fields.get("結束")),
+        start=_first_clean_field(fields, START_DATE_FIELDS),
+        end=_first_clean_field(fields, END_DATE_FIELDS),
         volume_count=parse_count(fields.get("冊數")),
         chapter_count=parse_count(fields.get("話數")),
         genre=list(header_genre),
         raw_fields=dict(fields),
     )
+
+
+def _first_clean_field(fields: dict[str, str], names: tuple[str, ...]) -> Optional[str]:
+    """Return the first non-empty normalized value from equivalent Wiki fields."""
+    for name in names:
+        value = clean_wiki_text(fields.get(name))
+        if value:
+            return value
+    return None
 
 
 def _parse_publishers(value: Optional[str]) -> dict[str, list[str]]:

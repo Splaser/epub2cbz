@@ -42,6 +42,51 @@ class EditionCountTests(unittest.TestCase):
             21,
         )
 
+class DateFieldAliasTests(unittest.TestCase):
+    def test_traditional_start_and_end_date_fields_are_supported(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|標題 = 膽大黨
+|開始日 = 2021年4月6日
+|結束日 = 2026年7月1日
+}}
+""")
+
+        self.assertIsNotNone(parsed.main_manga)
+        self.assertEqual(parsed.main_manga.start, "2021年4月6日")
+        self.assertEqual(parsed.main_manga.end, "2026年7月1日")
+
+    def test_simplified_date_fields_are_supported(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|标题 = Example
+|开始日 = 2022年3月
+|结束 = 2025年8月
+}}
+""")
+
+        self.assertIsNotNone(parsed.main_manga)
+        self.assertEqual(parsed.main_manga.start, "2022年3月")
+        self.assertEqual(parsed.main_manga.end, "2025年8月")
+
+    def test_release_date_is_used_only_when_start_fields_are_missing(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|標題 = Example
+|開始 = 2020年
+|發售日 = 2019年12月
+}}
+""")
+        fallback = parse_wikitext("""
+{{Infobox animanga/Manga
+|標題 = Example
+|發售日 = 2019年12月
+}}
+""")
+
+        self.assertEqual(parsed.main_manga.start, "2020年")
+        self.assertEqual(fallback.main_manga.start, "2019年12月")
+
 
 if __name__ == "__main__":
     unittest.main()
