@@ -1121,6 +1121,32 @@ def _tb_split_parts_match_common_aspect(
     return True
 
 
+def _tagged_tb_fallback_y(
+    im: Image.Image,
+    rotate_hint: int | None,
+    common_page_size: tuple[int, int] | None,
+) -> int | None:
+    """
+    Return a conservative center split for EPUB-declared rotated spreads.
+
+    Some Kmoe EPUBs concatenate two pages without leaving a white gutter.  In
+    that case pixel-only gutter detection has no candidate at all.  The rotate
+    metadata is useful, but is not sufficient by itself because cover wraps and
+    promotional foldouts may carry the same tag.  Only accept the fallback when
+    both resulting halves have the same aspect ratio as the book's dominant
+    single-page size.
+    """
+    if rotate_hint != 1 or common_page_size is None:
+        return None
+
+    _, h = im.size
+    split_y = h // 2
+    if not _tb_split_parts_match_common_aspect(im, split_y, common_page_size):
+        return None
+
+    return split_y
+
+
 def _tb_pre_split_skip_reason(
     im: Image.Image,
     split_y: int,
@@ -1236,7 +1262,13 @@ def split_wide_image_if_needed(
                     if rotate_hint == 1 and has_relaxed_horizontal_separator(im, rejected_y):
                         split_y = rejected_y
                         split_reason = "rotate-tag"
-                    else:
+
+                if split_y is None:
+                    tagged_y = _tagged_tb_fallback_y(im, rotate_hint, common_page_size)
+                    if tagged_y is not None:
+                        split_y = tagged_y
+                        split_reason = "rotate-tag-half"
+                    elif rejected_y is not None:
                         print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
 
                 if split_y is not None:
