@@ -25,11 +25,11 @@ def load_exact_wiki_series_for_dir(
     """
     Try to load Wiki metadata for a series directory.
 
-    This is intentionally conservative for main.py: only an exact Wiki title match
-    enables ComicInfo injection. Any mismatch or network/parser failure returns None
-    so EPUB -> CBZ conversion continues unchanged.
+    A Wiki redirect or alternate page title is accepted. The local directory name
+    remains the ComicInfo Series later, while the available Wiki fields are kept.
+    Network failures still return None so EPUB -> CBZ conversion can continue.
 
-    Successful matches are cached once per series directory in series.meta.json.
+    Successful lookups are cached once per series directory in series.meta.json.
     """
     path = Path(series_dir)
     series_name = path.name.strip()
@@ -47,27 +47,53 @@ def load_exact_wiki_series_for_dir(
 
     try:
         page_data = wiki_client.page_data(series_name)
-    except Exception as exc:
-        print(f"  - skip Wiki ComicInfo: {series_name} lookup failed ({exc})")
-        return None
+    except Exception as direct_exc:
+        try:
+            page_data = wiki_client.page_data_for_query(series_name, limit=5)
+            print(
+                "  - Wiki ComicInfo search fallback: "
+                f"directory '{series_name}' -> page '{page_data.title}'"
+            )
+        except Exception as search_exc:
+            print(
+                f"  - skip Wiki ComicInfo: {series_name} lookup failed "
+                f"(direct: {direct_exc}; search: {search_exc})"
+            )
+            return None
 
     if not _is_exact_or_converted_title_match(series_name, page_data.title, page_data.converted_title):
         print(
-            "  - skip Wiki ComicInfo: "
-            f"directory title '{series_name}' != wiki title '{page_data.title}'"
+            "  - Wiki ComicInfo title differs; keeping Wiki metadata: "
+            f"directory '{series_name}' -> page '{page_data.title}'"
         )
-        return None
 
     try:
         series = build_series_metadata_from_page_data(page_data, query=series_name)
     except Exception as exc:
-        print(f"  - skip Wiki ComicInfo: {series_name} metadata parse failed ({exc})")
-        return None
+        print(
+            "  - Wiki ComicInfo infobox parse failed; keeping page metadata: "
+            f"{series_name} ({exc})"
+        )
+        series = _partial_wiki_series_from_page_data(page_data)
 
     if use_cache:
         save_cached_wiki_series(cache_path, series_name=series_name, wiki_series=series)
 
     return series
+
+
+def _partial_wiki_series_from_page_data(page_data) -> WikiSeriesMetadata:
+    """Keep page-level Wiki fields when no usable manga infobox is available."""
+    return WikiSeriesMetadata(
+        page_title=page_data.title,
+        pageid=page_data.pageid,
+        page_url=page_data.page_url,
+        wikibase_item=page_data.wikibase_item,
+        summary=page_data.extract or page_data.description,
+        main_manga=WikiMangaInfo(title=page_data.title),
+        series_sort=page_data.defaultsort,
+        categories=list(page_data.categories),
+    )
 
 
 def load_wiki_series_for_url(
