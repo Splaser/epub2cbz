@@ -73,15 +73,21 @@ def extract_series_name(path_or_name: str) -> str:
 
     base = os.path.splitext(os.path.basename(path_or_name))[0]
 
-    m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', base)
-    if m:
-        return m[-1].strip()
-
+    # The containing series directory is user-controlled and is usually more
+    # complete than the publisher/source label embedded in an EPUB filename.
+    # For example, "JOJO的奇妙冒險9 JOJO Lands" must not be shortened to the
+    # bracketed filename label "JOJO的奇妙冒險9JOJO".
     parts = [p for p in path_or_name.split("/") if p]
     if len(parts) >= 2:
         parent = os.path.splitext(parts[-2])[0].strip()
         if parent and parent not in {".", ".."}:
             return parent
+
+    # A bare filename has no directory context, so retain the legacy bracket
+    # extraction as its best available series name.
+    m = re.findall(r'\[([^\]]*[\u4e00-\u9fff]+[^\]]*)\]', base)
+    if m:
+        return m[-1].strip()
 
     return clean_raw_name(base).strip()
 
