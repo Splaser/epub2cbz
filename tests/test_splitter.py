@@ -60,6 +60,34 @@ class TaggedTbFallbackTests(unittest.TestCase):
 
             self.assertEqual(result, [str(image_path)])
 
+    def test_rotate_zero_tall_page_is_never_split(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "title-page.png"
+            Image.new("RGB", (1213, 2480), "black").save(image_path)
+
+            with patch("images.splitter.get_epub_rotate_hint", return_value=0):
+                result = split_wide_image_if_needed(
+                    str(image_path),
+                    temp_dir,
+                    common_page_size=(1512, 2480),
+                )
+
+            self.assertEqual(result, [str(image_path)])
+
+    def test_missing_rotate_tag_is_never_split(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "untagged-wide.png"
+            Image.new("RGB", (2400, 1600), "white").save(image_path)
+
+            with patch("images.splitter.get_epub_rotate_hint", return_value=None):
+                result = split_wide_image_if_needed(
+                    str(image_path),
+                    temp_dir,
+                    common_page_size=(1000, 1600),
+                )
+
+            self.assertEqual(result, [str(image_path)])
+
 
 if __name__ == "__main__":
     unittest.main()

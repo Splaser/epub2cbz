@@ -1254,6 +1254,14 @@ def split_wide_image_if_needed(
             ext = os.path.splitext(img_path)[1].lower()
             is_common_page_size = _matches_common_page_size(w, h, common_page_size)
             rotate_hint = get_epub_rotate_hint(img_path)
+
+            # EPUB page splitting is opt-in.  Heuristic-only splitting can turn
+            # unusually tall title pages, bonus art, or cover material into two
+            # near-square fragments.  Only images explicitly declared as
+            # rotated spreads by the EPUB are eligible for splitting.
+            if rotate_hint != 1:
+                return [img_path]
+
             # Rotated double-page scans often show the real page separator as a
             # horizontal white gutter. Detect this before the generic ratio rules.
             if w >= 800 and h >= 500:
