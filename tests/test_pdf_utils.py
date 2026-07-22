@@ -36,6 +36,19 @@ class PdfOutputNameTests(unittest.TestCase):
             "电子游戏软件 v054.cbz",
         )
 
+    def test_numbered_subseries_is_not_treated_as_special(self):
+        self.series_dir = os.path.join(self.temp_dir.name, "UCG-PS3专辑")
+        self.assertEqual(
+            build_pdf_output_cbz_name(self._path("PS3专辑 Vol.01.pdf")),
+            "UCG-PS3专辑 v001.cbz",
+        )
+
+    def test_unrelated_special_title_keeps_special_numbering(self):
+        self.assertEqual(
+            build_pdf_output_cbz_name(self._path("GAME集中营试刊VOL.1.pdf")),
+            "电子游戏软件 SP001 GAME集中营试刊VOL.1.cbz",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,30 @@ def _clean_periodical_suffix(suffix: str, *labels: str) -> str:
     return suffix.strip(" .·・-_()[]【】")
 
 
+def _strip_subseries_title_before_volume(
+    periodical_name: str,
+    series_name: str,
+) -> str:
+    """Drop a repeated subseries title before an embedded volume number.
+
+    A directory such as ``UCG-PS3专辑`` contains a separately numbered run
+    named ``PS3专辑 Vol.01``.  Here ``专辑`` describes the run; it does not make
+    each volume a Kavita special.  Only strip the title when it is represented
+    in the directory name, so genuine titles such as ``GAME集中营试刊VOL.1`` in
+    an unrelated series directory still use SP numbering.
+    """
+    embedded_volume = _PDF_EMBEDDED_VOLUME_RE.search(periodical_name)
+    if embedded_volume is None or embedded_volume.start() == 0:
+        return periodical_name
+
+    title = periodical_name[:embedded_volume.start()].strip(" .·・-_()[]【】")
+    normalized_title = re.sub(r"[^\w]+", "", title).casefold()
+    normalized_series = re.sub(r"[^\w]+", "", series_name).casefold()
+    if len(normalized_title) >= 3 and normalized_title in normalized_series:
+        return periodical_name[embedded_volume.start():]
+    return periodical_name
+
+
 def build_pdf_output_cbz_name(pdf_path: str) -> str:
     """Build a Kavita-friendly filename for periodical PDFs."""
     stem = clean_pdf_name(os.path.splitext(os.path.basename(pdf_path))[0])
@@ -148,6 +172,10 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
         return f"{stem}.cbz"
 
     periodical_name = _strip_series_prefix(stem, series_name)
+    periodical_name = _strip_subseries_title_before_volume(
+        periodical_name,
+        series_name,
+    )
     special_keyword = next(
         (keyword for keyword in _PDF_SPECIAL_KEYWORDS if keyword in periodical_name),
         None,
