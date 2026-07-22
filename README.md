@@ -130,6 +130,20 @@ PDF 优先做快速相似度匹配，只有未匹配时才回退 OCR。PDF 不�
 中文杂志文件名支持把 `创刊号 YYYY.MM` 识别为 `v001`，并把 `第06期 YYYY.MM`
 这类名称按期号识别为 `v006`；出版年月不会写入输出文件名。带 `试刊VOL.1/2`
 的早期刊物会分别识别为 `SP001/SP002`，不占用正式刊物的卷号。
+`01年第08期.总第85期` 这类名称使用总期号，输出为 `v085`。
+
+### CBZ 扫描白边裁剪
+
+`cbz_crop_margins.py` 用于裁掉老杂志扫描图四周的扫描仪白底。它逐页检测纸张/内容边界，
+并用全书奇偶页的典型尺寸保护稀疏白底页；`ComicInfo.xml` 等非图片条目原样保留。
+默认不会覆盖原文件：
+
+```bash
+python cbz_crop_margins.py "电子游戏软件 SP001 GAME集中营试刊VOL.1.cbz"
+```
+
+输出为同目录的 `*.cropped.cbz`。可以先用 `--dry-run` 查看每页裁剪框；确认后如需原地替换，
+使用 `--replace`。`--padding 12` 控制书页边界外保留的像素数。
 
 ---
 
@@ -139,6 +153,7 @@ PDF 优先做快速相似度匹配，只有未匹配时才回退 OCR。PDF 不�
 epub2cbz/
 ├─ main.py
 ├─ pdf_main.py
+├─ cbz_crop_margins.py
 ├─ pdf/
 │  ├─ pdf_to_cbz.py
 │  └─ pdf_utils.py
