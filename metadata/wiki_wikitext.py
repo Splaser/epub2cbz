@@ -24,6 +24,13 @@ except ModuleNotFoundError:
 INFOBOX_HEADER = "infobox animanga/headerofja"
 INFOBOX_MANGA = "infobox animanga/manga"
 
+EDITION_QUERY_ALIASES = {
+    "愛藏版": ("文庫版", "文库版"),
+    "爱藏版": ("文庫版", "文库版"),
+    "文庫版": ("文庫版", "文库版"),
+    "文库版": ("文庫版", "文库版"),
+}
+
 
 def iter_templates(wikitext: str) -> list[str]:
     templates = []
@@ -245,6 +252,51 @@ def parse_count(value: Optional[str]) -> Optional[int]:
     return int(match.group(0))
 
 
+def parse_edition_count(value: Optional[str], query: Optional[str]) -> Optional[int]:
+    """Return a count annotated for the edition requested in a local series name."""
+    text = clean_wiki_text(value)
+    if not text or not query:
+        return None
+
+    edition_labels: tuple[str, ...] = ()
+    for query_label, aliases in EDITION_QUERY_ALIASES.items():
+        if query_label in query:
+            edition_labels = aliases
+            break
+
+    if not edition_labels:
+        return None
+
+    normalized = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    for edition_label in edition_labels:
+        for edition_match in re.finditer(re.escape(edition_label), normalized, flags=re.I):
+            # Work inside the comma/slash-delimited edition clause so a count
+            # from the preceding regular edition cannot leak into a form such
+            # as "普通版：37卷／文庫版：全21卷".
+            left_delimiter = max(
+                (normalized.rfind(char, 0, edition_match.start()) for char in ",，;；/／、"),
+                default=-1,
+            )
+            right_positions = [
+                pos
+                for char in ",，;；/／、"
+                if (pos := normalized.find(char, edition_match.end())) != -1
+            ]
+            right_delimiter = min(right_positions, default=len(normalized))
+            clause_start = left_delimiter + 1
+            clause = normalized[clause_start:right_delimiter]
+            counts = list(re.finditer(r"(\d+)\s*[卷冊册]", clause))
+            if counts:
+                edition_center = edition_match.start() - clause_start + len(edition_label) / 2
+                nearest = min(
+                    counts,
+                    key=lambda match: abs((match.start() + match.end()) / 2 - edition_center),
+                )
+                return int(nearest.group(1))
+
+    return None
+
+
 def extract_categories(wikitext: str) -> list[str]:
     categories = []
     seen = set()
@@ -453,10 +505,16 @@ def parse_wikitext(wikitext: str, query: Optional[str] = None) -> WikiWikitextMe
         elif name == INFOBOX_MANGA:
             manga_blocks.append(parse_manga_block(parse_template_fields(template), header))
 
+    main_manga = select_manga_block(manga_blocks, query=query)
+    if main_manga is not None:
+        edition_count = parse_edition_count(main_manga.raw_fields.get("冊數"), query)
+        if edition_count is not None:
+            main_manga.volume_count = edition_count
+
     return WikiWikitextMetadata(
         header=header,
         manga_blocks=manga_blocks,
-        main_manga=select_manga_block(manga_blocks, query=query),
+        main_manga=main_manga,
         categories=extract_categories(wikitext),
     )
 
