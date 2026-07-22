@@ -1,9 +1,11 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-from images.splitter import _tagged_tb_fallback_y
+from images.splitter import _tagged_tb_fallback_y, split_wide_image_if_needed
 
 
 class TaggedTbFallbackTests(unittest.TestCase):
@@ -41,6 +43,22 @@ class TaggedTbFallbackTests(unittest.TestCase):
         image = Image.new("RGB", (1264, 1640), "black")
 
         self.assertIsNone(_tagged_tb_fallback_y(image, 1, None))
+
+    def test_tagged_cover_does_not_fall_through_to_generic_tall_split(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "cover-wrap.png"
+            Image.new("RGB", (763, 1680), "black").save(image_path)
+
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1), patch(
+                "images.splitter.ROTATE_VERTICAL_SPLIT_PAGE", True
+            ):
+                result = split_wide_image_if_needed(
+                    str(image_path),
+                    temp_dir,
+                    common_page_size=self.common_page_size,
+                )
+
+            self.assertEqual(result, [str(image_path)])
 
 
 if __name__ == "__main__":

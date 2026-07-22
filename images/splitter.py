@@ -1286,6 +1286,13 @@ def split_wide_image_if_needed(
                     print(f"  - split [wide-TB:gutter-pre:{split_reason}] {base} {w}x{h} y={split_y}")
                     return _save_tb_split(im, split_y, out_dir, base, ext)
 
+            # A rotate tag can also describe a full cover wrap or foldout. If it
+            # did not pass the book-level spread-shape check above, do not let it
+            # fall through to the generic tall-image half split.
+            if rotate_hint == 1:
+                print(f"  - keep [split-skip:rotate-tag-nonspread-shape] {base} {w}x{h}")
+                return [img_path]
+
             # 横向拆分：优先识别中间白色装订/分割线，再退回到 w//2
             if w / h >= 1.25:
                 if h > w:  # 纵图横置情况
