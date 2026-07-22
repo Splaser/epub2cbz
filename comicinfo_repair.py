@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 import zipfile
@@ -15,7 +14,11 @@ from metadata.comicinfo_archive import (
     find_comicinfo_entry_name,
     write_comicinfo_to_cbz,
 )
-from metadata.epub_comicinfo import load_exact_wiki_series_for_dir, load_wiki_series_for_url
+from metadata.epub_comicinfo import (
+    infer_volume_number as infer_shared_volume_number,
+    load_exact_wiki_series_for_dir,
+    load_wiki_series_for_url,
+)
 from metadata.wiki_models import WikiSeriesMetadata
 from metadata.wiki_scraper import build_series_metadata_from_file
 from metadata.wiki_to_comicinfo import wiki_series_to_comicinfo
@@ -138,7 +141,7 @@ def resolve_wiki_metadata(args: argparse.Namespace, target_dir: Path) -> Optiona
             page_url=args.page_url or probe_defaults.get("page_url"),
             wikibase_item=args.wikibase_item or probe_defaults.get("wikibase_item"),
             summary=args.summary or probe_defaults.get("summary"),
-            query=args.query,
+            query=args.query or target_dir.name,
             series_sort=args.series_sort,
         )
 
@@ -262,7 +265,8 @@ def process_cbz(
     )
     print(
         f"  Series={comicinfo.series} | Title={comicinfo.title} | "
-        f"Count={comicinfo.count} | Publisher={comicinfo.publisher}"
+        f"Count={comicinfo.count} | Year={comicinfo.year} | "
+        f"Publisher={comicinfo.publisher}"
     )
 
     if args.print_xml:
@@ -291,16 +295,9 @@ def resolve_series_title(cbz_path: Path, args: argparse.Namespace) -> Optional[s
 
 
 def infer_volume_number(filename: str) -> int:
-    normalized = filename.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-
-    for pattern in (
-        r"第\s*0*(\d+)\s*[卷冊册]",
-        r"vol(?:ume)?\.?\s*0*(\d+)",
-        r"0*(\d+)",
-    ):
-        match = re.search(pattern, normalized, flags=re.I)
-        if match:
-            return int(match.group(1))
+    volume_number = infer_shared_volume_number(filename)
+    if volume_number is not None:
+        return volume_number
 
     raise ValueError(f"Cannot infer volume number from filename: {filename}")
 
