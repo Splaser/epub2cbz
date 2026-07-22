@@ -64,6 +64,11 @@ _PDF_CHINESE_NUMBERED_ISSUE_RE = re.compile(
     r"^第\s*0*(?P<issue>\d{1,4})\s*期(?P<suffix>.*)$",
     flags=re.IGNORECASE,
 )
+_PDF_YEARLY_TOTAL_ISSUE_RE = re.compile(
+    r"^[\s._·・-]*\d{2,4}\s*年\s*第\s*0*\d{1,2}\s*期"
+    r"[\s._·・-]*总\s*第\s*0*(?P<issue>\d{1,4})\s*期(?P<suffix>.*)$",
+    flags=re.IGNORECASE,
+)
 _PDF_FOUNDING_ISSUE_RE = re.compile(
     r"^创刊号(?P<suffix>.*)$",
     flags=re.IGNORECASE,
@@ -160,9 +165,15 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
             periodical_name = f"{issue:03d}" + embedded_volume.group("suffix")
 
     periodical_name = _PDF_RELEASE_GROUP_SUFFIX_RE.sub("", periodical_name)
+    yearly_total_issue = _PDF_YEARLY_TOTAL_ISSUE_RE.match(periodical_name)
     chinese_issue = _PDF_CHINESE_NUMBERED_ISSUE_RE.match(periodical_name)
     founding_issue = _PDF_FOUNDING_ISSUE_RE.match(periodical_name)
-    if chinese_issue is not None:
+    if yearly_total_issue is not None:
+        periodical_name = (
+            f"{int(yearly_total_issue.group('issue')):03d}"
+            + yearly_total_issue.group("suffix")
+        )
+    elif chinese_issue is not None:
         periodical_name = (
             f"{int(chinese_issue.group('issue')):03d}"
             + chinese_issue.group("suffix")
