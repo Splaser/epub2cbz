@@ -13,6 +13,20 @@ DEFAULT_MANGA_VALUE = "Yes"
 DEFAULT_AGE_RATING = "Teen"
 
 
+# Wikipedia mixes useful subject categories with categories used to maintain the
+# encyclopedia itself.  None of the latter belong in a comic library's tags.
+_NON_CONTENT_CATEGORY_PATTERNS = (
+    # Citation/source/template tracking (CS1, language markers, subscriptions).
+    re.compile(r"^CS1", re.I),
+    re.compile(r"^含有.*(?:條目|条目|文本)"),
+    re.compile(r"(?:需訂閱|需订阅).*(?:頁面|页面)"),
+    re.compile(r"(?:條目|条目|頁面|页面)$"),
+    # Wikipedia/Wikidata consistency and account tracking categories.
+    re.compile(r"(?:維基|维基|Wikidata|维基数据|維基數據)", re.I),
+    re.compile(r"(?:用戶名|用户名)", re.I),
+)
+
+
 def wiki_series_to_comicinfo(
     wiki: WikiSeriesMetadata,
     volume_number: str | int,
@@ -130,22 +144,21 @@ def _genres_from_wiki(manga_info: WikiMangaInfo, categories: list[str]) -> list[
 
 def _tags_from_wiki(manga_info: WikiMangaInfo, categories: list[str]) -> list[str]:
     # Magazine/categories are useful for filtering, but should stay outside the wikitext DTO layer.
-    ignored_categories = {
-        "日本漫畫作品",
-        "日本漫画作品",
-        "2009年日本OVA",
-        "含有日語的條目",
-        "含有英语的条目",
-        "含有英語的條目",
-        "使用ISBN魔术链接的页面",
-    }
     tags = [
         *manga_info.tags,
         *manga_info.genre,
         *manga_info.magazine,
-        *(category for category in categories if category not in ignored_categories),
+        *(category for category in categories if _is_content_category(category)),
     ]
     return _dedupe(tags)
+
+
+def _is_content_category(value: str) -> bool:
+    text = str(value).strip()
+    if not text:
+        return False
+
+    return not any(pattern.search(text) for pattern in _NON_CONTENT_CATEGORY_PATTERNS)
 
 
 def _build_notes(wiki: WikiSeriesMetadata) -> Optional[str]:
