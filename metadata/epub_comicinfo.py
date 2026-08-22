@@ -15,7 +15,14 @@ from .wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 2
+SERIES_METADATA_CACHE_VERSION = 3
+
+
+# Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.
+# Use the canonical manga article title before attempting the normal lookup.
+WIKI_TITLE_OVERRIDES = {
+    "死神": "BLEACH",
+}
 
 
 def load_exact_wiki_series_for_dir(
@@ -38,6 +45,8 @@ def load_exact_wiki_series_for_dir(
     if not series_name:
         return None
 
+    lookup_title = WIKI_TITLE_OVERRIDES.get(_title_key(series_name), series_name)
+
     cache_path = path / SERIES_METADATA_CACHE_NAME
     if use_cache:
         cached = load_cached_wiki_series(cache_path, expected_series_name=series_name)
@@ -48,13 +57,13 @@ def load_exact_wiki_series_for_dir(
     wiki_client = client or WikiClient()
 
     try:
-        page_data = wiki_client.page_data(series_name)
+        page_data = wiki_client.page_data(lookup_title)
     except Exception as direct_exc:
         try:
-            page_data = wiki_client.page_data_for_query(series_name, limit=5)
+            page_data = wiki_client.page_data_for_query(lookup_title, limit=5)
             print(
                 "  - Wiki ComicInfo search fallback: "
-                f"directory '{series_name}' -> page '{page_data.title}'"
+                f"query '{lookup_title}' -> page '{page_data.title}'"
             )
         except Exception as search_exc:
             print(
@@ -70,7 +79,7 @@ def load_exact_wiki_series_for_dir(
         )
 
     try:
-        series = build_series_metadata_from_page_data(page_data, query=series_name)
+        series = build_series_metadata_from_page_data(page_data, query=lookup_title)
     except Exception as exc:
         print(
             "  - Wiki ComicInfo infobox parse failed; keeping page metadata: "
@@ -235,6 +244,9 @@ def build_comicinfo_xml_for_epub(
     epub = Path(epub_path)
     series_name = epub.parent.name
     cleaned_title = clean_raw_name(epub.stem)
+    series_prefix = f"{series_name} - "
+    if cleaned_title.casefold().startswith(series_prefix.casefold()):
+        cleaned_title = cleaned_title[len(series_prefix):].strip()
     is_special = extract_special_label(cleaned_title) is not None
     volume_number = infer_volume_number(epub.name) or infer_volume_number(output_cbz_name)
 

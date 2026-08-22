@@ -118,6 +118,59 @@ class RepairMetadataTests(unittest.TestCase):
         self.assertIn("<Count>21</Count>", xml)
         self.assertIn("<Year>1981</Year>", xml)
 
+    def test_repair_writes_unnumbered_anniversary_book_as_special(self):
+        wiki = WikiSeriesMetadata(
+            page_title="BLEACH",
+            pageid=1,
+            page_url="https://zh.wikipedia.org/wiki/BLEACH",
+            wikibase_item=None,
+            summary="summary",
+            main_manga=WikiMangaInfo(volume_count=74),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            series_dir = Path(temp_dir) / "死神"
+            series_dir.mkdir()
+            cbz_path = series_dir / "死神 - 20周年紀念短篇.cbz"
+            with zipfile.ZipFile(cbz_path, "w") as archive:
+                archive.writestr("001.jpg", b"image")
+
+            process_cbz(cbz_path, _repair_args(), wiki, effective_write=True)
+
+            with zipfile.ZipFile(cbz_path, "r") as archive:
+                xml = archive.read("ComicInfo.xml").decode("utf-8")
+
+        self.assertIn("<Title>20周年紀念短篇</Title>", xml)
+        self.assertIn("<Format>Special</Format>", xml)
+        self.assertNotIn("<Number>", xml)
+        self.assertIn("<Count>74</Count>", xml)
+
+    def test_repair_writes_numbered_bonus_book_as_special(self):
+        wiki = WikiSeriesMetadata(
+            page_title="BLEACH",
+            pageid=1,
+            page_url=None,
+            wikibase_item=None,
+            summary=None,
+            main_manga=WikiMangaInfo(volume_count=74),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            series_dir = Path(temp_dir) / "死神"
+            series_dir.mkdir()
+            cbz_path = series_dir / "死神 - 番外 第2卷.cbz"
+            with zipfile.ZipFile(cbz_path, "w") as archive:
+                archive.writestr("001.jpg", b"image")
+
+            process_cbz(cbz_path, _repair_args(), wiki, effective_write=True)
+
+            with zipfile.ZipFile(cbz_path, "r") as archive:
+                xml = archive.read("ComicInfo.xml").decode("utf-8")
+
+        self.assertIn("<Title>番外 第2卷</Title>", xml)
+        self.assertIn("<Format>Special</Format>", xml)
+        self.assertIn("<Number>2</Number>", xml)
+
 
 if __name__ == "__main__":
     unittest.main()

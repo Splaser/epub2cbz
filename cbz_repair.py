@@ -7,7 +7,15 @@ import shutil
 from images.filter import get_garbage_image_reason, is_image_file
 from images.splitter import infer_common_page_size, split_wide_image_if_needed
 from builder.cbz_builder import make_cbz
-from metadata.comicinfo_archive import find_comicinfo_entry_name
+from metadata.comicinfo import ComicInfo
+from metadata.comicinfo_archive import (
+    find_comicinfo_entry_name,
+    write_comicinfo_to_cbz,
+)
+from metadata.epub_comicinfo import (
+    build_comicinfo_xml_for_epub,
+    load_exact_wiki_series_for_dir,
+)
 
 
 def iter_images_recursive(root_dir: str):
@@ -23,7 +31,12 @@ def iter_images_recursive(root_dir: str):
     return images
 
 
-def repair_cbz(cbz_path: str, overwrite: bool = True, backup: bool = True):
+def repair_cbz(
+    cbz_path: str,
+    overwrite: bool = True,
+    backup: bool = False,
+    wiki_series_metadata=None,
+):
     temp_dir = tempfile.mkdtemp(prefix="cbz_repair_")
     out_path = cbz_path if overwrite else os.path.splitext(cbz_path)[0] + ".repaired.cbz"
 
@@ -85,18 +98,52 @@ def repair_cbz(cbz_path: str, overwrite: bool = True, backup: bool = True):
         images_with_index.sort(key=lambda x: (x[0], x[1]))
         final_images = [img for _, _, img in images_with_index]
 
-        # 没有垃圾页、也没有拆页，就不覆盖
+        refreshed_comicinfo_xml = None
+        if wiki_series_metadata is not None:
+            try:
+                refreshed_comicinfo_xml = build_comicinfo_xml_for_epub(
+                    epub_path=cbz_path,
+                    output_cbz_name=os.path.basename(cbz_path),
+                    page_count=len(final_images),
+                    wiki_series=wiki_series_metadata,
+                )
+            except Exception as exc:
+                print(f"  - keep existing ComicInfo.xml: refresh failed ({exc})")
+
+        metadata_changed = (
+            refreshed_comicinfo_xml is not None
+            and comicinfo_xml != refreshed_comicinfo_xml
+        )
+
+        # Metadata-only repairs preserve every existing archive entry.  Avoid a
+        # full image rebuild when pages themselves did not need repair.
+        if garbage_count == 0 and split_count == 0 and metadata_changed:
+            if overwrite and backup:
+                create_backup(cbz_path)
+
+            metadata_out_path = cbz_path if overwrite else out_path
+            if not overwrite:
+                shutil.copy2(cbz_path, metadata_out_path)
+            write_comicinfo_to_cbz(
+                metadata_out_path,
+                ComicInfo.from_xml_bytes(refreshed_comicinfo_xml),
+            )
+            print(f"✅ ComicInfo refreshed: {metadata_out_path}")
+            return
+
+        # 没有垃圾页、拆页或元数据变化，就不覆盖
         if garbage_count == 0 and split_count == 0:
             print(f"✅ No repair needed, skipping overwrite: {cbz_path}")
             return
 
         if overwrite and backup:
-            backup_path = cbz_path + ".bak"
-            if not os.path.exists(backup_path):
-                shutil.copy2(cbz_path, backup_path)
-                print(f"  - backup created: {backup_path}")
+            create_backup(cbz_path)
 
-        make_cbz(final_images, out_path, comicinfo_xml=comicinfo_xml)
+        make_cbz(
+            final_images,
+            out_path,
+            comicinfo_xml=refreshed_comicinfo_xml or comicinfo_xml,
+        )
 
         print(
             f"✅ CBZ repaired: {out_path}, "
@@ -121,6 +168,13 @@ def read_existing_comicinfo_xml(archive: zipfile.ZipFile):
         return None
 
 
+def create_backup(cbz_path: str):
+    backup_path = cbz_path + ".bak"
+    if not os.path.exists(backup_path):
+        shutil.copy2(cbz_path, backup_path)
+        print(f"  - backup created: {backup_path}")
+
+
 def get_base_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
@@ -141,5 +195,14 @@ if __name__ == "__main__":
     if not cbz_files:
         print(f"❌ No cbz files found in: {base_dir}")
 
+    wiki_series_metadata = None
+    if cbz_files:
+        wiki_series_metadata = load_exact_wiki_series_for_dir(base_dir)
+
     for cbz in cbz_files:
-        repair_cbz(cbz, overwrite=True, backup=False)
+        repair_cbz(
+            cbz,
+            overwrite=True,
+            backup=False,
+            wiki_series_metadata=wiki_series_metadata,
+        )

@@ -10,6 +10,8 @@ import sys
 import zipfile
 from typing import Any, Optional
 
+from utils.metadata_utils import clean_raw_name, extract_special_label
+
 from metadata.comicinfo_archive import (
     find_comicinfo_entry_name,
     write_comicinfo_to_cbz,
@@ -237,30 +239,41 @@ def process_cbz(
     if not cbz_path.exists():
         raise FileNotFoundError(cbz_path)
 
-    try:
-        volume_number = infer_volume_number(cbz_path.name)
-    except ValueError as exc:
-        print(f"  - skip ComicInfo: {exc}")
+    series_title = resolve_series_title(cbz_path, args)
+    cleaned_title = clean_raw_name(cbz_path.stem)
+    if series_title:
+        series_prefix = f"{series_title} - "
+        if cleaned_title.casefold().startswith(series_prefix.casefold()):
+            cleaned_title = cleaned_title[len(series_prefix):].strip()
+
+    is_special = extract_special_label(cleaned_title) is not None
+    volume_number = infer_shared_volume_number(cbz_path.name)
+    if volume_number is None and not is_special:
+        print(f"  - skip ComicInfo: Cannot infer volume number from filename: {cbz_path.name}")
         return
 
     page_count = count_cbz_pages(cbz_path)
     existing_entry = find_existing_comicinfo(cbz_path)
     comicinfo = wiki_series_to_comicinfo(
         wiki,
-        volume_number,
-        series_title=resolve_series_title(cbz_path, args),
+        volume_number or 0,
+        title=cleaned_title if is_special else None,
+        series_title=series_title,
         series_sort=args.series_sort,
-        write_number=args.write_number,
+        write_number=args.write_number and volume_number is not None,
         write_volume=args.write_volume,
         language_iso=args.language_iso,
         manga=args.manga,
         age_rating=args.age_rating,
         page_count=page_count,
     )
+    if is_special:
+        comicinfo.format = "Special"
 
     print(
         f"{'[WRITE]' if effective_write else '[DRY-RUN]'} {cbz_path} "
-        f"volume={volume_number} pages={page_count} "
+        f"volume={volume_number if volume_number is not None else '-'} "
+        f"pages={page_count} "
         f"existing={existing_entry or '-'}"
     )
     print(
