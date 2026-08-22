@@ -231,7 +231,7 @@ def _display_publisher(value: Optional[str]) -> Optional[str]:
 
     # Country/region labels describe which localized publisher Wiki listed;
     # Kavita's Publisher field should contain only the publisher's actual name.
-    return re.sub(
+    text = re.sub(
         r"^\s*(?:(?:"
         r"臺灣|台灣|台湾|日本|香港|中國大陸|中国大陆|中國|中国|新加坡|"
         r"韓國|韩国|美國|美国|加拿大|法國|法国|德國|德国|義大利|意大利|"
@@ -240,7 +240,12 @@ def _display_publisher(value: Optional[str]) -> Optional[str]:
         "",
         text,
         flags=re.I,
-    ).strip() or None
+    ).strip()
+
+    # Wiki may describe publisher succession as "old → current". Kavita has a
+    # single Publisher field, so keep the rightmost/current publisher only.
+    publisher_chain = re.split(r"\s*(?:→|⇒|➜|➝|⟶|-+>)\s*", text)
+    return publisher_chain[-1].strip() or None
 
 
 def _dedupe(values: list[str]) -> list[str]:

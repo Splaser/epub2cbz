@@ -124,6 +124,14 @@ class WikiTagFilteringTests(unittest.TestCase):
 
         self.assertIsNone(comic_info.publisher)
 
+    def test_publisher_succession_keeps_current_rightmost_publisher(self):
+        wiki = self._wiki(categories=[])
+        wiki.main_manga.taiwan_publishers = ["臺灣：大然文化→東立出版社"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.publisher, "東立出版社")
+
     @staticmethod
     def _wiki(*, categories):
         return WikiSeriesMetadata(
