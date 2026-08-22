@@ -71,6 +71,32 @@ class WikiTagFilteringTests(unittest.TestCase):
             ["奇幻", "週刊少年Jump", *categories],
         )
 
+    def test_wiki_genres_and_categories_map_to_stable_kavita_genres(self):
+        wiki = self._wiki(categories=[
+            "冒險漫畫",
+            "黑暗奇幻",
+            "獵奇",
+            "大正時代背景漫畫",
+            "引文格式1錯誤：日期",
+        ])
+        wiki.main_manga.genre = ["動作", "科幻", "戀愛喜劇"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(
+            comic_info.genre,
+            [
+                "Action",
+                "Science fiction",
+                "Romance",
+                "Comedy",
+                "Adventure",
+                "Fantasy",
+                "Horror",
+                "Historical",
+            ],
+        )
+
     @staticmethod
     def _wiki(*, categories):
         return WikiSeriesMetadata(

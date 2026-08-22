@@ -29,6 +29,33 @@ _NON_CONTENT_CATEGORY_PATTERNS = (
 )
 
 
+# Kavita genres are free-form, but keeping a small stable vocabulary makes its
+# filters useful across Traditional/Simplified Chinese and English Wiki pages.
+_GENRE_PATTERNS = (
+    ("Action", re.compile(
+        r"(?:動作|动作|戰鬥|战斗|格鬥|格斗|武俠|武侠|action)",
+        re.I,
+    )),
+    ("Adventure", re.compile(r"(?:冒險|冒险|adventure)", re.I)),
+    ("Fantasy", re.compile(r"(?:奇幻|魔幻|魔法|fantasy)", re.I)),
+    ("Science fiction", re.compile(r"(?:科幻|科學幻想|科学幻想|science[ -]?fiction|sci-fi)", re.I)),
+    ("Mystery", re.compile(r"(?:推理|懸疑|悬疑|偵探|侦探|mystery|detective)", re.I)),
+    ("Thriller", re.compile(r"(?:驚悚|惊悚|thriller)", re.I)),
+    ("Horror", re.compile(r"(?:恐怖|獵奇|猎奇|horror)", re.I)),
+    ("Romance", re.compile(r"(?:戀愛|恋爱|愛情|爱情|浪漫|romance)", re.I)),
+    ("Comedy", re.compile(r"(?:喜劇|喜剧|搞笑|幽默|comedy)", re.I)),
+    ("Drama", re.compile(r"(?:劇情|剧情|戲劇|戏剧|drama)", re.I)),
+    ("Historical", re.compile(
+        r"(?:歷史|历史|(?:時代|时代)(?:劇|剧|背景)|historical)",
+        re.I,
+    )),
+    ("Sports", re.compile(r"(?:體育|体育|運動|运动|競技|竞技|sports?)", re.I)),
+    ("Slice of life", re.compile(r"(?:日常|生活片段|slice of life)", re.I)),
+    ("Supernatural", re.compile(r"(?:超自然|靈異|灵异|神怪|妖怪|supernatural)", re.I)),
+    ("Mecha", re.compile(r"(?:機甲|机甲|機器人|机器人|mecha)", re.I)),
+)
+
+
 def wiki_series_to_comicinfo(
     wiki: WikiSeriesMetadata,
     volume_number: str | int,
@@ -128,18 +155,16 @@ def _preferred_publisher(manga_info: WikiMangaInfo) -> Optional[str]:
 
 
 def _genres_from_wiki(manga_info: WikiMangaInfo, categories: list[str]) -> list[str]:
-    genre_map = {
-        "格鬥技漫畫": "Action",
-        "格斗技漫画": "Action",
-        "動作漫畫": "Action",
-        "动作漫画": "Action",
-    }
     genres = []
 
     for value in [*manga_info.genre, *categories]:
-        mapped = genre_map.get(value)
-        if mapped:
-            genres.append(mapped)
+        text = str(value).strip()
+        if not text or not _is_content_category(text):
+            continue
+
+        for genre, pattern in _GENRE_PATTERNS:
+            if pattern.search(text):
+                genres.append(genre)
 
     return _dedupe(genres)
 
