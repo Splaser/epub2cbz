@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from utils.metadata_utils import clean_raw_name, extract_special_label
+from utils.metadata_utils import (
+    clean_raw_name,
+    extract_special_label,
+    strip_regional_edition_suffix,
+)
 
 from .wiki_client import WikiClient
 from .wiki_models import WikiMangaInfo, WikiSeriesMetadata
@@ -45,7 +49,8 @@ def load_exact_wiki_series_for_dir(
     if not series_name:
         return None
 
-    lookup_title = WIKI_TITLE_OVERRIDES.get(_title_key(series_name), series_name)
+    lookup_title = strip_regional_edition_suffix(series_name)
+    lookup_title = WIKI_TITLE_OVERRIDES.get(_title_key(lookup_title), lookup_title)
 
     cache_path = path / SERIES_METADATA_CACHE_NAME
     if use_cache:

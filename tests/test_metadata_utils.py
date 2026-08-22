@@ -5,10 +5,33 @@ from utils.metadata_utils import (
     build_output_cbz_name,
     extract_series_name,
     extract_special_label,
+    strip_regional_edition_suffix,
 )
 
 
 class SeriesNameTests(unittest.TestCase):
+    def test_regional_edition_suffix_is_removed_from_output_filename_only(self):
+        for suffix in ("（台版）", "（臺版）", "（日版）", "(港版)"):
+            with self.subTest(suffix=suffix):
+                path = f"V:/漫畫/烏龍派出所{suffix}/卷001.epub"
+                self.assertEqual(
+                    build_output_cbz_name(path),
+                    "烏龍派出所 - 第001卷.cbz",
+                )
+
+        self.assertEqual(
+            strip_regional_edition_suffix("烏龍派出所（台版）"),
+            "烏龍派出所",
+        )
+
+    def test_non_regional_edition_suffix_is_preserved(self):
+        path = "V:/漫畫/足球小將（愛藏版）/卷001.epub"
+
+        self.assertEqual(
+            build_output_cbz_name(path),
+            "足球小將（愛藏版） - 第001卷.cbz",
+        )
+
     def test_parent_directory_wins_over_truncated_bracket_label(self):
         path = (
             "E:/Books/JOJO的奇妙冒險9 JOJO Lands/"

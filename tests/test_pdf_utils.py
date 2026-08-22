@@ -49,6 +49,14 @@ class PdfOutputNameTests(unittest.TestCase):
             "电子游戏软件 SP001 GAME集中营试刊VOL.1.cbz",
         )
 
+    def test_regional_edition_suffix_is_removed_from_pdf_filename(self):
+        self.series_dir = os.path.join(self.temp_dir.name, "烏龍派出所（日版）")
+
+        self.assertEqual(
+            build_pdf_output_cbz_name(self._path("Vol.01.pdf")),
+            "烏龍派出所 v001.cbz",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

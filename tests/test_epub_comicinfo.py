@@ -242,5 +242,29 @@ class SpecialComicInfoTests(unittest.TestCase):
         )
 
 
+class RegionalEditionComicInfoTests(unittest.TestCase):
+    def test_region_suffix_is_kept_in_metadata_while_output_name_omits_it(self):
+        wiki = WikiSeriesMetadata(
+            page_title="烏龍派出所",
+            pageid=1,
+            page_url=None,
+            wikibase_item=None,
+            summary=None,
+            main_manga=WikiMangaInfo(title="烏龍派出所", volume_count=201),
+        )
+
+        xml = build_comicinfo_xml_for_epub(
+            epub_path="V:/漫畫/烏龍派出所（台版）/卷001.epub",
+            output_cbz_name="烏龍派出所 - 第001卷.cbz",
+            page_count=200,
+            wiki_series=wiki,
+        )
+
+        comicinfo = ComicInfo.from_xml_bytes(xml)
+        self.assertEqual(comicinfo.series, "烏龍派出所（台版）")
+        self.assertEqual(comicinfo.localized_series, "烏龍派出所（台版）")
+        self.assertEqual(comicinfo.number, "1")
+
+
 if __name__ == "__main__":
     unittest.main()

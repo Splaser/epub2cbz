@@ -110,6 +110,20 @@ def extract_series_name(path_or_name: str) -> str:
     return clean_raw_name(base).strip()
 
 
+def strip_regional_edition_suffix(series_name: str) -> str:
+    """Remove a trailing regional edition marker from a generated filename."""
+    cleaned = re.sub(
+        r"\s*[（(]\s*(?:"
+        r"台版|臺版|台湾版|台灣版|日版|日本版|港版|香港版|"
+        r"陸版|陆版|大陸版|大陆版|繁中版|繁體中文版|简中版|簡中版"
+        r")\s*[）)]\s*$",
+        "",
+        str(series_name),
+        flags=re.I,
+    ).strip()
+    return cleaned or str(series_name).strip()
+
+
 def build_output_cbz_name(
     epub_path: str, series_name: str = None, is_periodical: bool = False
 ) -> str:
@@ -118,6 +132,7 @@ def build_output_cbz_name(
     series_name = (series_name or extract_series_name(epub_path) or "").strip()
     if not series_name:
         series_name = clean_raw_name(raw_name).strip() or "Unknown"
+    series_name = strip_regional_edition_suffix(series_name)
     
     cleaned = clean_raw_name(raw_name)
 

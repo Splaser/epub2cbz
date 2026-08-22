@@ -9,6 +9,7 @@ from statistics import median
 from typing import List
 
 from PIL import Image
+from utils.metadata_utils import strip_regional_edition_suffix
 
 try:
     import fitz
@@ -170,6 +171,7 @@ def build_pdf_output_cbz_name(pdf_path: str) -> str:
     series_name = os.path.basename(os.path.dirname(os.path.abspath(pdf_path))).strip()
     if not series_name:
         return f"{stem}.cbz"
+    series_name = strip_regional_edition_suffix(series_name)
 
     periodical_name = _strip_series_prefix(stem, series_name)
     periodical_name = _strip_subseries_title_before_volume(
