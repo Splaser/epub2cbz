@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from utils.metadata_utils import clean_raw_name, extract_special_label
+
 from .wiki_client import WikiClient
 from .wiki_models import WikiMangaInfo, WikiSeriesMetadata
 from .wiki_scraper import build_series_metadata_from_page_data
@@ -232,18 +234,24 @@ def build_comicinfo_xml_for_epub(
 
     epub = Path(epub_path)
     series_name = epub.parent.name
+    cleaned_title = clean_raw_name(epub.stem)
+    is_special = extract_special_label(cleaned_title) is not None
     volume_number = infer_volume_number(epub.name) or infer_volume_number(output_cbz_name)
 
-    if volume_number is None:
+    if volume_number is None and not is_special:
         print(f"  - skip ComicInfo: cannot infer volume number from {epub.name}")
         return None
 
     comicinfo = wiki_series_to_comicinfo(
         wiki_series,
-        volume_number,
+        volume_number or 0,
+        title=cleaned_title if is_special else None,
         series_title=series_name,
+        write_number=volume_number is not None,
         page_count=page_count,
     )
+    if is_special:
+        comicinfo.format = "Special"
 
     if comicinfo.count is None:
         comicinfo.count = count_epubs_in_dir(epub.parent)

@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from metadata.comicinfo import ComicInfo
 from metadata.epub_comicinfo import (
+    build_comicinfo_xml_for_epub,
     load_cached_wiki_series,
     load_exact_wiki_series_for_dir,
 )
@@ -147,6 +149,48 @@ class MetadataCacheVersionTests(unittest.TestCase):
             )
 
         self.assertIsNone(result)
+
+
+class SpecialComicInfoTests(unittest.TestCase):
+    def test_unnumbered_bonus_books_are_written_as_specials(self):
+        for title in ("官方角色設定集", "秘笈", "畫冊", "20周年紀念短篇"):
+            with self.subTest(title=title):
+                xml = build_comicinfo_xml_for_epub(
+                    epub_path=f"E:/Books/測試系列/{title}.epub",
+                    output_cbz_name=f"測試系列 - {title}.cbz",
+                    page_count=74,
+                    wiki_series=self._wiki(),
+                )
+
+                self.assertIsNotNone(xml)
+                comicinfo = ComicInfo.from_xml_bytes(xml)
+                self.assertEqual(comicinfo.title, title)
+                self.assertEqual(comicinfo.format, "Special")
+                self.assertIsNone(comicinfo.number)
+                self.assertEqual(comicinfo.count, 20)
+
+    def test_numbered_bonus_book_is_special_but_keeps_its_number(self):
+        xml = build_comicinfo_xml_for_epub(
+            epub_path="E:/Books/測試系列/番外 第2卷.epub",
+            output_cbz_name="測試系列 - 番外 第002册.cbz",
+            page_count=50,
+            wiki_series=self._wiki(),
+        )
+
+        comicinfo = ComicInfo.from_xml_bytes(xml)
+        self.assertEqual(comicinfo.format, "Special")
+        self.assertEqual(comicinfo.number, "2")
+
+    @staticmethod
+    def _wiki():
+        return WikiSeriesMetadata(
+            page_title="測試系列",
+            pageid=1,
+            page_url=None,
+            wikibase_item=None,
+            summary=None,
+            main_manga=WikiMangaInfo(title="測試系列", volume_count=20),
+        )
 
 
 if __name__ == "__main__":
