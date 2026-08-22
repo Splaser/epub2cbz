@@ -15,7 +15,7 @@ from .wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 3
+SERIES_METADATA_CACHE_VERSION = 4
 
 
 # Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.

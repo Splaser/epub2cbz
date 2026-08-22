@@ -87,7 +87,7 @@ def wiki_series_to_comicinfo(
         summary=wiki.summary,
         year=_extract_year(manga_info.start),
         writer=_display_list(manga_info.author),
-        publisher=_display_text(_preferred_publisher(manga_info)),
+        publisher=_display_publisher(_preferred_publisher(manga_info)),
         imprint=manga_info.label,
         genre=_genres_from_wiki(manga_info, wiki.categories),
         tags=_tags_from_wiki(manga_info, wiki.categories),
@@ -142,11 +142,11 @@ def _extract_year(value: Optional[str]) -> Optional[int]:
 
 
 def _preferred_publisher(manga_info: WikiMangaInfo) -> Optional[str]:
+    # This collection targets Traditional Chinese editions. Do not fall back
+    # to the original Japanese publisher, which describes a different release.
     for candidates in (
         manga_info.taiwan_publishers,
         manga_info.hongkong_publishers,
-        manga_info.japan_publishers,
-        manga_info.publishers,
     ):
         if candidates:
             return candidates[0]
@@ -222,6 +222,25 @@ def _display_text(value: Optional[str]) -> Optional[str]:
     }
 
     return overrides.get(value, value)
+
+
+def _display_publisher(value: Optional[str]) -> Optional[str]:
+    text = _display_text(value)
+    if not text:
+        return None
+
+    # Country/region labels describe which localized publisher Wiki listed;
+    # Kavita's Publisher field should contain only the publisher's actual name.
+    return re.sub(
+        r"^\s*(?:(?:"
+        r"臺灣|台灣|台湾|日本|香港|中國大陸|中国大陆|中國|中国|新加坡|"
+        r"韓國|韩国|美國|美国|加拿大|法國|法国|德國|德国|義大利|意大利|"
+        r"西班牙|馬來西亞|马来西亚"
+        r")\s*[：:]\s*)+",
+        "",
+        text,
+        flags=re.I,
+    ).strip() or None
 
 
 def _dedupe(values: list[str]) -> list[str]:

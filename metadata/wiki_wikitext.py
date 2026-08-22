@@ -335,7 +335,14 @@ def parse_manga_block(
     fields: dict[str, str],
     header: Optional[WikiAnimangaHeader] = None,
 ) -> WikiMangaInfo:
-    publishers = _parse_publishers(fields.get("出版社"))
+    publisher_values = [
+        fields.get("出版社"),
+        fields.get("其他出版社"),
+        fields.get("其他出版商"),
+    ]
+    publishers = _parse_publishers(
+        "<br>".join(value for value in publisher_values if value)
+    )
     header_genre = header.genre if header else []
 
     return WikiMangaInfo(

@@ -88,5 +88,21 @@ class DateFieldAliasTests(unittest.TestCase):
         self.assertEqual(fallback.main_manga.start, "2019年12月")
 
 
+class PublisherFieldTests(unittest.TestCase):
+    def test_localized_publishers_are_parsed_from_other_publishers_field(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|標題 = BLEACH
+|出版社 = {{flagicon|Japan}} [[集英社]]
+|其他出版社 = {{flagicon|Taiwan}} [[東立出版社]]<br>{{flagicon|Hong Kong}} [[文化傳信]]
+}}
+""")
+
+        self.assertIsNotNone(parsed.main_manga)
+        self.assertEqual(parsed.main_manga.japan_publishers, ["集英社"])
+        self.assertEqual(parsed.main_manga.taiwan_publishers, ["東立出版社"])
+        self.assertEqual(parsed.main_manga.hongkong_publishers, ["文化傳信"])
+
+
 if __name__ == "__main__":
     unittest.main()

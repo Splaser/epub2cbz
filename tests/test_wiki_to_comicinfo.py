@@ -97,6 +97,33 @@ class WikiTagFilteringTests(unittest.TestCase):
             ],
         )
 
+    def test_publisher_region_prefix_is_removed(self):
+        wiki = self._wiki(categories=[])
+        wiki.main_manga.taiwan_publishers = ["臺灣： 青文出版社"]
+        wiki.main_manga.japan_publishers = ["日本：集英社"]
+        wiki.main_manga.publishers = ["日本：集英社", "臺灣： 青文出版社"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.publisher, "青文出版社")
+
+    def test_non_region_publisher_prefix_is_preserved(self):
+        wiki = self._wiki(categories=[])
+        wiki.main_manga.taiwan_publishers = ["時報文化：漫畫部"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.publisher, "時報文化：漫畫部")
+
+    def test_japanese_publisher_is_not_used_for_traditional_chinese_edition(self):
+        wiki = self._wiki(categories=[])
+        wiki.main_manga.japan_publishers = ["日本：集英社"]
+        wiki.main_manga.publishers = ["日本：集英社"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertIsNone(comic_info.publisher)
+
     @staticmethod
     def _wiki(*, categories):
         return WikiSeriesMetadata(
