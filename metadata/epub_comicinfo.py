@@ -265,6 +265,12 @@ def infer_volume_number(filename: str) -> Optional[int]:
     for pattern in patterns:
         match = re.search(pattern, normalized, flags=re.I)
         if match:
+            # A number describing an anniversary is not a volume number.  This
+            # matters for both source names and renamed output such as
+            # "Series - 20周年紀念短篇.cbz".
+            following_text = normalized[match.end():]
+            if re.match(r"\s*(?:週年|周年)", following_text):
+                continue
             return int(match.group(1))
 
     return None

@@ -18,6 +18,8 @@ DEFAULT_AGE_RATING = "Teen"
 _NON_CONTENT_CATEGORY_PATTERNS = (
     # Citation/source/template tracking (CS1, language markers, subscriptions).
     re.compile(r"^CS1", re.I),
+    re.compile(r"^(?:引文|引用)格式", re.I),
+    re.compile(r"(?:錯誤|错误)"),
     re.compile(r"^含有.*(?:條目|条目|文本)"),
     re.compile(r"(?:需訂閱|需订阅).*(?:頁面|页面)"),
     re.compile(r"(?:條目|条目|頁面|页面)$"),

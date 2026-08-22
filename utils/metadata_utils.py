@@ -19,6 +19,24 @@ def extract_special_label(cleaned: str) -> str | None:
     return None
 
 
+def extract_special_volume(cleaned: str) -> int | None:
+    """Extract a real issue number without treating an anniversary as one."""
+    for pattern in VOL_PATTERN_LIST:
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if not match:
+            continue
+
+        # A leading number can be a year/anniversary descriptor rather than a
+        # book number, e.g. "20周年紀念短篇".
+        following_text = cleaned[match.end():]
+        if re.match(r"\s*(?:週年|周年)", following_text):
+            continue
+
+        return int(match.group(1))
+
+    return None
+
+
 def compute_normal_page_ratio(image_paths: List[str]) -> float:
     """
     计算漫画全书正常单页宽高比中位数
@@ -137,12 +155,7 @@ def build_output_cbz_name(
     # 2) 普通特刊/番外/特典/画集
     special_kw = extract_special_label(cleaned)
     if special_kw:
-        vol = None
-        for p in VOL_PATTERN_LIST:
-            m = re.search(p, cleaned, re.IGNORECASE)
-            if m:
-                vol = int(m.group(1))
-                break
+        vol = extract_special_volume(cleaned)
 
         if vol is not None:
             return f"{series_name} - {special_kw} 第{vol:03d}册.cbz"
