@@ -97,7 +97,7 @@ def extract_series_name(path_or_name: str) -> str:
     # bracketed filename label "JOJO的奇妙冒險9JOJO".
     parts = [p for p in path_or_name.split("/") if p]
     if len(parts) >= 2:
-        parent = os.path.splitext(parts[-2])[0].strip()
+        parent = parts[-2].strip()
         if parent and parent not in {".", ".."}:
             return parent
 

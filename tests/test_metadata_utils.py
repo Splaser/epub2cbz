@@ -47,6 +47,15 @@ class SeriesNameTests(unittest.TestCase):
             "JOJO的奇妙冒險9 JOJO Lands - 第001卷.cbz",
         )
 
+    def test_period_in_series_directory_is_not_treated_as_extension(self):
+        path = r"E:\Books\Dr.STONE 新石紀\[Kmoe][Dr.STONE新石紀]卷01.epub"
+
+        self.assertEqual(extract_series_name(path), "Dr.STONE 新石紀")
+        self.assertEqual(
+            build_output_cbz_name(path),
+            "Dr.STONE 新石紀 - 第001卷.cbz",
+        )
+
     def test_bare_filename_still_uses_bracket_label(self):
         filename = "[Kmoe][海賊王]卷111.epub"
 
