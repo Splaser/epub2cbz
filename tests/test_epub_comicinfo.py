@@ -302,6 +302,55 @@ class DistinctWikiSeriesTests(unittest.TestCase):
                 self.assertEqual(comicinfo.series_sort, series_name)
                 self.assertEqual(comicinfo.count, expected_count)
 
+    def test_baki_sequels_use_shared_wiki_page_and_distinct_manga_blocks(self):
+        wikitext = """
+{{Infobox animanga/Manga|標題=刃牙|冊數=全42卷}}
+{{Infobox animanga/Manga|標題=刃牙II|冊數=全31卷}}
+{{Infobox animanga/Manga|標題=範馬刃牙|冊數=全37卷}}
+{{Infobox animanga/Manga|標題=刃牙道|冊數=全22卷}}
+{{Infobox animanga/Manga|標題=刃牙道II|冊數=全17卷}}
+"""
+        page = WikiPageData(
+            requested_title="刃牙",
+            title="刃牙",
+            pageid=1,
+            wikitext=wikitext,
+            defaultsort="Baki",
+        )
+        expected_counts = {
+            "刃牙": 42,
+            "範馬刃牙": 37,
+            "刃牙II": 31,
+            "刃牙道": 22,
+            "刃牙道II": 17,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for series_name, expected_count in expected_counts.items():
+                with self.subTest(series=series_name):
+                    series_dir = Path(temp_dir) / series_name
+                    series_dir.mkdir()
+                    client = _FakeWikiClient(page)
+                    wiki = load_exact_wiki_series_for_dir(
+                        series_dir,
+                        client=client,
+                        use_cache=False,
+                    )
+                    self.assertEqual(client.page_data_calls, ["刃牙"])
+                    self.assertEqual(wiki.main_manga.title, series_name)
+                    self.assertEqual(wiki.main_manga.volume_count, expected_count)
+
+                    xml = build_comicinfo_xml_for_epub(
+                        epub_path=str(series_dir / "卷01.epub"),
+                        output_cbz_name=f"{series_name} - 第001卷.cbz",
+                        page_count=100,
+                        wiki_series=wiki,
+                    )
+                    comicinfo = ComicInfo.from_xml_bytes(xml)
+                    self.assertEqual(comicinfo.series, series_name)
+                    self.assertEqual(comicinfo.series_sort, series_name)
+                    self.assertEqual(comicinfo.count, expected_count)
+
 
 if __name__ == "__main__":
     unittest.main()

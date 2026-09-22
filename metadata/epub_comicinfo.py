@@ -28,6 +28,14 @@ WIKI_TITLE_OVERRIDES = {
     "死神": "BLEACH",
 }
 
+# These sequels have manga blocks on the main series article, not separate pages.
+WIKI_PAGE_OVERRIDES = {
+    "範馬刃牙": "刃牙",
+    "刃牙ii": "刃牙",
+    "刃牙道": "刃牙",
+    "刃牙道ii": "刃牙",
+}
+
 
 def load_exact_wiki_series_for_dir(
     series_dir: str | Path,
@@ -51,6 +59,7 @@ def load_exact_wiki_series_for_dir(
 
     lookup_title = strip_regional_edition_suffix(series_name)
     lookup_title = WIKI_TITLE_OVERRIDES.get(_title_key(lookup_title), lookup_title)
+    page_title = WIKI_PAGE_OVERRIDES.get(_title_key(lookup_title), lookup_title)
 
     cache_path = path / SERIES_METADATA_CACHE_NAME
     if use_cache:
@@ -62,7 +71,7 @@ def load_exact_wiki_series_for_dir(
     wiki_client = client or WikiClient()
 
     try:
-        page_data = wiki_client.page_data(lookup_title)
+        page_data = wiki_client.page_data(page_title)
     except Exception as direct_exc:
         try:
             page_data = wiki_client.page_data_for_query(lookup_title, limit=5)
