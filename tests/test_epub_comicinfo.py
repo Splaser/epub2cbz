@@ -11,6 +11,7 @@ from metadata.epub_comicinfo import (
     load_exact_wiki_series_for_dir,
 )
 from metadata.wiki_models import WikiMangaInfo, WikiPageData, WikiSeriesMetadata
+from metadata.wiki_scraper import build_series_metadata_from_wikitext
 
 
 class _FakeWikiClient:
@@ -168,12 +169,12 @@ class RelaxedWikiTitleTests(unittest.TestCase):
 
 
 class MetadataCacheVersionTests(unittest.TestCase):
-    def test_old_cache_without_date_alias_support_is_rejected(self):
+    def test_previous_cache_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "series.meta.json"
             cache_path.write_text(
                 json.dumps({
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "series_name": "膽大黨",
                     "metadata": {},
                 }),
@@ -264,6 +265,42 @@ class RegionalEditionComicInfoTests(unittest.TestCase):
         self.assertEqual(comicinfo.series, "烏龍派出所（台版）")
         self.assertEqual(comicinfo.localized_series, "烏龍派出所（台版）")
         self.assertEqual(comicinfo.number, "1")
+
+
+class DistinctWikiSeriesTests(unittest.TestCase):
+    def test_main_series_and_sequel_keep_distinct_kavita_names_and_counts(self):
+        wikitext = """
+{{Infobox animanga/Manga
+|冊數 = 全22冊
+}}
+{{Infobox animanga/Manga
+|標題 = 殺手寓言 The second contact
+|冊數 = 全9冊
+}}
+"""
+        for series_name, expected_count in (
+            ("殺手寓言", 22),
+            ("殺手寓言 The second contact", 9),
+        ):
+            with self.subTest(series=series_name):
+                wiki = build_series_metadata_from_wikitext(
+                    wikitext,
+                    page_title="殺手寓言",
+                    pageid=1,
+                    query=series_name,
+                    series_sort="The Fable",
+                )
+                xml = build_comicinfo_xml_for_epub(
+                    epub_path=f"E:/Books/{series_name}/卷01.epub",
+                    output_cbz_name=f"{series_name} - 第001卷.cbz",
+                    page_count=100,
+                    wiki_series=wiki,
+                )
+                comicinfo = ComicInfo.from_xml_bytes(xml)
+                self.assertEqual(comicinfo.series, series_name)
+                self.assertEqual(comicinfo.localized_series, series_name)
+                self.assertEqual(comicinfo.series_sort, series_name)
+                self.assertEqual(comicinfo.count, expected_count)
 
 
 if __name__ == "__main__":

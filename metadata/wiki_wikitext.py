@@ -439,6 +439,7 @@ def _append_unique(values: list[str], value: str) -> None:
 def select_manga_block(
     manga_blocks: list[WikiMangaInfo],
     query: Optional[str] = None,
+    page_title: Optional[str] = None,
 ) -> Optional[WikiMangaInfo]:
     if not manga_blocks:
         return None
@@ -446,21 +447,36 @@ def select_manga_block(
     if not query:
         return manga_blocks[0]
 
+    # The first manga block often omits its title and inherits the article title.
     scores = [
-        (_score_manga_block(block, query), index, block)
+        (
+            _score_manga_block(
+                block,
+                query,
+                fallback_title=page_title if index == 0 and not block.title else None,
+            ),
+            index,
+            block,
+        )
         for index, block in enumerate(manga_blocks)
     ]
     scores.sort(key=lambda item: (-item[0], item[1]))
     return scores[0][2]
 
 
-def _score_manga_block(block: WikiMangaInfo, query: str) -> int:
+def _score_manga_block(
+    block: WikiMangaInfo,
+    query: str,
+    fallback_title: Optional[str] = None,
+) -> int:
     query_key = _match_key(query)
-    title = block.title or ""
+    title = block.title or fallback_title or ""
     title_key = _match_key(title)
     score = 0
 
-    if title_key and (title_key in query_key or query_key in title_key):
+    if title_key and title_key == query_key:
+        score += 10
+    elif title_key and (title_key in query_key or query_key in title_key):
         score += 5
 
     if "外傳" in query and "外傳" in title:
@@ -513,7 +529,11 @@ def _match_key(value: str) -> str:
     return re.sub(r"[\s_\-:：・,，。·《》「」『』【】\[\]()（）]+", "", text).casefold()
 
 
-def parse_wikitext(wikitext: str, query: Optional[str] = None) -> WikiWikitextMetadata:
+def parse_wikitext(
+    wikitext: str,
+    query: Optional[str] = None,
+    page_title: Optional[str] = None,
+) -> WikiWikitextMetadata:
     header = None
     manga_blocks: list[WikiMangaInfo] = []
 
@@ -524,7 +544,7 @@ def parse_wikitext(wikitext: str, query: Optional[str] = None) -> WikiWikitextMe
         elif name == INFOBOX_MANGA:
             manga_blocks.append(parse_manga_block(parse_template_fields(template), header))
 
-    main_manga = select_manga_block(manga_blocks, query=query)
+    main_manga = select_manga_block(manga_blocks, query=query, page_title=page_title)
     if main_manga is not None:
         edition_count = parse_edition_count(main_manga.raw_fields.get("冊數"), query)
         if edition_count is not None:

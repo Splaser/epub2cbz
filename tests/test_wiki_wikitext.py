@@ -104,5 +104,30 @@ class PublisherFieldTests(unittest.TestCase):
         self.assertEqual(parsed.main_manga.hongkong_publishers, ["文化傳信"])
 
 
+class MangaBlockSelectionTests(unittest.TestCase):
+    def test_untitled_main_manga_and_named_sequel_select_separately(self):
+        wikitext = """
+{{Infobox animanga/Manga
+|作者 = 南勝久
+|冊數 = 全22冊
+}}
+{{Infobox animanga/Manga
+|標題 = 殺手寓言 The second contact
+|作者 = 南勝久
+|冊數 = 全9冊
+}}
+"""
+        first = parse_wikitext(wikitext, query="殺手寓言", page_title="殺手寓言")
+        sequel = parse_wikitext(
+            wikitext,
+            query="殺手寓言 The second contact",
+            page_title="殺手寓言",
+        )
+
+        self.assertEqual(first.main_manga.volume_count, 22)
+        self.assertEqual(sequel.main_manga.volume_count, 9)
+        self.assertEqual(sequel.main_manga.title, "殺手寓言 The second contact")
+
+
 if __name__ == "__main__":
     unittest.main()

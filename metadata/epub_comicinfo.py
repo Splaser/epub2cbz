@@ -19,7 +19,7 @@ from .wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 4
+SERIES_METADATA_CACHE_VERSION = 5
 
 
 # Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.
@@ -264,6 +264,8 @@ def build_comicinfo_xml_for_epub(
         volume_number or 0,
         title=cleaned_title if is_special else None,
         series_title=series_name,
+        # Kavita prefers SeriesSort over Series for the displayed series name.
+        series_sort=series_name,
         write_number=volume_number is not None,
         page_count=page_count,
     )

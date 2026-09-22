@@ -28,7 +28,7 @@ def build_series_metadata_from_wikitext(
     categories: Optional[list[str]] = None,
     series_sort: Optional[str] = None,
 ) -> WikiSeriesMetadata:
-    parsed = parse_wikitext(wikitext, query=query)
+    parsed = parse_wikitext(wikitext, query=query, page_title=page_title)
     if parsed.main_manga is None:
         raise ValueError("No Infobox animanga/Manga block found in wikitext")
 
