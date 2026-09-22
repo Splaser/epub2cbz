@@ -18,7 +18,7 @@ def make_cbz(image_paths, output_cbz, comicinfo_xml=None):
     )
     os.close(fd)
     try:
-        with zipfile.ZipFile(temporary_cbz, "w", compression=zipfile.ZIP_DEFLATED) as cbz:
+        with zipfile.ZipFile(temporary_cbz, "w", compression=zipfile.ZIP_STORED) as cbz:
             for idx, img_path in enumerate(image_paths, start=1):
                 ext = os.path.splitext(img_path)[1].lower()
                 arcname = f"{idx:04d}{ext}"
@@ -27,7 +27,7 @@ def make_cbz(image_paths, output_cbz, comicinfo_xml=None):
             if comicinfo_xml:
                 if isinstance(comicinfo_xml, str):
                     comicinfo_xml = comicinfo_xml.encode("utf-8")
-                cbz.writestr("ComicInfo.xml", comicinfo_xml)
+                cbz.writestr("ComicInfo.xml", comicinfo_xml, compress_type=zipfile.ZIP_DEFLATED)
 
         with zipfile.ZipFile(temporary_cbz, "r") as cbz:
             bad_entry = cbz.testzip()
