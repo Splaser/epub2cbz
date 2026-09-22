@@ -10,7 +10,7 @@ from metadata.epub_comicinfo import (
     load_cached_wiki_series,
     load_exact_wiki_series_for_dir,
 )
-from metadata.wiki_models import WikiMangaInfo, WikiPageData, WikiSeriesMetadata
+from metadata.wiki_models import WikiMangaInfo, WikiPageData, WikiSearchItem, WikiSeriesMetadata
 from metadata.wiki_scraper import build_series_metadata_from_wikitext
 
 
@@ -30,11 +30,49 @@ class _SearchFallbackWikiClient:
         self.search_calls = []
 
     def page_data(self, title):
+        if title == self._page_data.title:
+            return self._page_data
         raise ValueError(f"page not found: {title}")
 
-    def page_data_for_query(self, query, *, limit=5):
+    def search(self, query, *, limit=5):
         self.search_calls.append((query, limit))
-        return self._page_data
+        return [WikiSearchItem(title=self._page_data.title, pageid=self._page_data.pageid)]
+
+
+class _SharedArticleWikiClient:
+    def __init__(self, page_data):
+        self._page_data = page_data
+        self.page_data_calls = []
+
+    def page_data(self, title):
+        self.page_data_calls.append(title)
+        if title == self._page_data.title:
+            return self._page_data
+        raise ValueError(f"page not found: {title}")
+
+    def search(self, query, *, limit=5):
+        return [WikiSearchItem(title=self._page_data.title, pageid=self._page_data.pageid)]
+
+
+class _UnavailableSearchWikiClient(_SharedArticleWikiClient):
+    def search(self, query, *, limit=5):
+        raise RuntimeError("search unavailable")
+
+
+class _CandidateWikiClient:
+    def __init__(self, pages):
+        self.pages = {page.title: page for page in pages}
+
+    def page_data(self, title):
+        if title not in self.pages:
+            raise ValueError(title)
+        return self.pages[title]
+
+    def search(self, query, *, limit=5):
+        return [
+            WikiSearchItem(title=page.title, pageid=page.pageid)
+            for page in self.pages.values()
+        ]
 
 
 def _page_data() -> WikiPageData:
@@ -147,6 +185,8 @@ class RelaxedWikiTitleTests(unittest.TestCase):
         )
 
     def test_infobox_failure_keeps_page_level_metadata(self):
+        page = _page_data()
+        page.title = "Local Series Name"
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "metadata.epub_comicinfo.build_series_metadata_from_page_data",
             side_effect=ValueError("missing manga infobox"),
@@ -155,12 +195,12 @@ class RelaxedWikiTitleTests(unittest.TestCase):
             series_dir.mkdir()
             result = load_exact_wiki_series_for_dir(
                 series_dir,
-                client=_FakeWikiClient(_page_data()),
+                client=_FakeWikiClient(page),
                 use_cache=False,
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(result.page_title, "The JOJOLands")
+        self.assertEqual(result.page_title, "Local Series Name")
         self.assertEqual(result.summary, "Wiki summary")
         self.assertEqual(result.page_url, "https://zh.wikipedia.org/wiki/The_JOJOLands")
         self.assertEqual(result.wikibase_item, "Q123")
@@ -302,6 +342,26 @@ class DistinctWikiSeriesTests(unittest.TestCase):
                 self.assertEqual(comicinfo.series_sort, series_name)
                 self.assertEqual(comicinfo.count, expected_count)
 
+    def test_untitled_main_manga_and_named_sequel_use_same_article(self):
+        page = WikiPageData(
+            requested_title="殺手寓言",
+            title="殺手寓言",
+            pageid=1,
+            wikitext="""
+{{Infobox animanga/Manga|冊數=全22冊}}
+{{Infobox animanga/Manga|標題=殺手寓言 The second contact|冊數=全9冊}}
+""",
+        )
+        for name, count in (("殺手寓言", 22), ("殺手寓言 The second contact", 9)):
+            with self.subTest(series=name):
+                wiki = load_exact_wiki_series_for_dir(
+                    Path("E:/Books") / name,
+                    client=_SharedArticleWikiClient(page),
+                    use_cache=False,
+                )
+                self.assertIsNotNone(wiki)
+                self.assertEqual(wiki.main_manga.volume_count, count)
+
     def test_baki_sequels_use_shared_wiki_page_and_distinct_manga_blocks(self):
         wikitext = """
 {{Infobox animanga/Manga|標題=刃牙|冊數=全42卷}}
@@ -309,6 +369,9 @@ class DistinctWikiSeriesTests(unittest.TestCase):
 {{Infobox animanga/Manga|標題=範馬刃牙|冊數=全37卷}}
 {{Infobox animanga/Manga|標題=刃牙道|冊數=全22卷}}
 {{Infobox animanga/Manga|標題=刃牙道II|冊數=全17卷}}
+{{Infobox animanga/Manga|標題=刃牙外傳 - 疵面|冊數=共8卷}}
+{{Infobox animanga/Manga|標題=刃牙外傳 ~ 創面 ~|冊數=全3卷}}
+{{Infobox animanga/Manga|標題=刃牙外傳 ~ 拳刃 ~|冊數=共1卷}}
 """
         page = WikiPageData(
             requested_title="刃牙",
@@ -317,27 +380,32 @@ class DistinctWikiSeriesTests(unittest.TestCase):
             wikitext=wikitext,
             defaultsort="Baki",
         )
-        expected_counts = {
-            "刃牙": 42,
-            "範馬刃牙": 37,
-            "刃牙II": 31,
-            "刃牙道": 22,
-            "刃牙道II": 17,
+        expected_manga = {
+            "刃牙": ("刃牙", 42),
+            "範馬刃牙": ("範馬刃牙", 37),
+            "刃牙II": ("刃牙II", 31),
+            "刃牙道": ("刃牙道", 22),
+            "刃牙道II": ("刃牙道II", 17),
+            "刃牙道Ⅱ": ("刃牙道II", 17),
+            "刃牙外傳 疵面": ("刃牙外傳 - 疵面", 8),
+            "刃牙外傳 創面": ("刃牙外傳 ~ 創面 ~", 3),
+            "刃牙外傳 拳刃": ("刃牙外傳 ~ 拳刃 ~", 1),
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            for series_name, expected_count in expected_counts.items():
+            for series_name, (expected_title, expected_count) in expected_manga.items():
                 with self.subTest(series=series_name):
                     series_dir = Path(temp_dir) / series_name
                     series_dir.mkdir()
-                    client = _FakeWikiClient(page)
+                    client = _SharedArticleWikiClient(page)
                     wiki = load_exact_wiki_series_for_dir(
                         series_dir,
                         client=client,
                         use_cache=False,
                     )
-                    self.assertEqual(client.page_data_calls, ["刃牙"])
-                    self.assertEqual(wiki.main_manga.title, series_name)
+                    expected_calls = ["刃牙"] if series_name == "刃牙" else [series_name, "刃牙"]
+                    self.assertEqual(client.page_data_calls, expected_calls)
+                    self.assertEqual(wiki.main_manga.title, expected_title)
                     self.assertEqual(wiki.main_manga.volume_count, expected_count)
 
                     xml = build_comicinfo_xml_for_epub(
@@ -350,6 +418,65 @@ class DistinctWikiSeriesTests(unittest.TestCase):
                     self.assertEqual(comicinfo.series, series_name)
                     self.assertEqual(comicinfo.series_sort, series_name)
                     self.assertEqual(comicinfo.count, expected_count)
+
+    def test_shared_article_can_be_found_when_wiki_search_is_unavailable(self):
+        page = WikiPageData(
+            requested_title="刃牙",
+            title="刃牙",
+            pageid=1,
+            wikitext="""
+{{Infobox animanga/Manga|標題=刃牙|冊數=全42卷}}
+{{Infobox animanga/Manga|標題=範馬刃牙|冊數=全37卷}}
+{{Infobox animanga/Manga|標題=刃牙道II|冊數=全17卷}}
+{{Infobox animanga/Manga|標題=刃牙外傳 ~ 創面 ~|冊數=全3卷}}
+""",
+        )
+        for name, count in (
+            ("範馬刃牙", 37),
+            ("刃牙道II", 17),
+            ("刃牙外傳 創面", 3),
+        ):
+            with self.subTest(series=name):
+                wiki = load_exact_wiki_series_for_dir(
+                    Path("E:/Books") / name,
+                    client=_UnavailableSearchWikiClient(page),
+                    use_cache=False,
+                )
+                self.assertIsNotNone(wiki)
+                self.assertEqual(wiki.main_manga.volume_count, count)
+
+    def test_search_prefers_matching_block_over_unrelated_first_result(self):
+        weak_direct = WikiPageData(
+            requested_title="刃牙道II",
+            title="刃牙道II",
+            pageid=3,
+            wikitext="沒有漫畫資料塊",
+        )
+        unrelated = WikiPageData(
+            requested_title="無關條目",
+            title="無關條目",
+            pageid=1,
+            wikitext="""
+{{Infobox animanga/Manga|標題=其他漫畫|冊數=全10卷}}
+{{Infobox animanga/Manga|標題=其他漫畫續集|冊數=全5卷}}
+""",
+        )
+        baki = WikiPageData(
+            requested_title="刃牙",
+            title="刃牙",
+            pageid=2,
+            wikitext="""
+{{Infobox animanga/Manga|標題=刃牙|冊數=全42卷}}
+{{Infobox animanga/Manga|標題=刃牙道II|冊數=全17卷}}
+""",
+        )
+        wiki = load_exact_wiki_series_for_dir(
+            Path("E:/Books/刃牙道II"),
+            client=_CandidateWikiClient([weak_direct, unrelated, baki]),
+            use_cache=False,
+        )
+        self.assertEqual(wiki.page_title, "刃牙")
+        self.assertEqual(wiki.main_manga.title, "刃牙道II")
 
 
 if __name__ == "__main__":

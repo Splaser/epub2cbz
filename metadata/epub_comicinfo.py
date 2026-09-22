@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
+import re
 from typing import Optional
 
 from utils.metadata_utils import (
@@ -13,9 +14,10 @@ from utils.metadata_utils import (
 )
 
 from .wiki_client import WikiClient
-from .wiki_models import WikiMangaInfo, WikiSeriesMetadata
+from .wiki_models import WikiMangaInfo, WikiPageData, WikiSeriesMetadata
 from .wiki_scraper import build_series_metadata_from_page_data
 from .wiki_to_comicinfo import wiki_series_to_comicinfo
+from .wiki_wikitext import _match_key, parse_wikitext
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
@@ -27,15 +29,6 @@ SERIES_METADATA_CACHE_VERSION = 5
 WIKI_TITLE_OVERRIDES = {
     "死神": "BLEACH",
 }
-
-# These sequels have manga blocks on the main series article, not separate pages.
-WIKI_PAGE_OVERRIDES = {
-    "範馬刃牙": "刃牙",
-    "刃牙ii": "刃牙",
-    "刃牙道": "刃牙",
-    "刃牙道ii": "刃牙",
-}
-
 
 def load_exact_wiki_series_for_dir(
     series_dir: str | Path,
@@ -59,7 +52,6 @@ def load_exact_wiki_series_for_dir(
 
     lookup_title = strip_regional_edition_suffix(series_name)
     lookup_title = WIKI_TITLE_OVERRIDES.get(_title_key(lookup_title), lookup_title)
-    page_title = WIKI_PAGE_OVERRIDES.get(_title_key(lookup_title), lookup_title)
 
     cache_path = path / SERIES_METADATA_CACHE_NAME
     if use_cache:
@@ -69,22 +61,9 @@ def load_exact_wiki_series_for_dir(
             return cached
 
     wiki_client = client or WikiClient()
-
-    try:
-        page_data = wiki_client.page_data(page_title)
-    except Exception as direct_exc:
-        try:
-            page_data = wiki_client.page_data_for_query(lookup_title, limit=5)
-            print(
-                "  - Wiki ComicInfo search fallback: "
-                f"query '{lookup_title}' -> page '{page_data.title}'"
-            )
-        except Exception as search_exc:
-            print(
-                f"  - skip Wiki ComicInfo: {series_name} lookup failed "
-                f"(direct: {direct_exc}; search: {search_exc})"
-            )
-            return None
+    page_data = _find_wiki_page_with_manga(wiki_client, lookup_title)
+    if page_data is None:
+        return None
 
     if not _is_exact_or_converted_title_match(series_name, page_data.title, page_data.converted_title):
         print(
@@ -105,6 +84,125 @@ def load_exact_wiki_series_for_dir(
         save_cached_wiki_series(cache_path, series_name=series_name, wiki_series=series)
 
     return series
+
+
+def _find_wiki_page_with_manga(client: WikiClient, query: str) -> Optional[WikiPageData]:
+    """Prefer an exact manga block, even when several works share one Wiki page."""
+    seen_titles = set()
+    best_page = None
+    best_strength = 0
+    try:
+        direct_page = client.page_data(query)
+    except Exception:
+        direct_page = None
+    else:
+        strength = _page_manga_match_strength(direct_page, query)
+        if strength == 3:
+            return direct_page
+        if strength:
+            best_page = direct_page
+            best_strength = strength
+        seen_titles.add(_title_key(direct_page.title))
+
+    try:
+        results = client.search(query, limit=5)
+    except Exception as exc:
+        print(f"  - Wiki ComicInfo search unavailable for '{query}' ({exc})")
+        results = []
+
+    for result in results:
+        title_key = _title_key(result.title)
+        if title_key in seen_titles:
+            continue
+        try:
+            page = client.page_data(result.title)
+        except Exception:
+            continue
+        seen_titles.add(title_key)
+
+        strength = _page_manga_match_strength(page, query)
+        if strength == 3:
+            print(f"  - Wiki ComicInfo search match: '{query}' -> '{page.title}'")
+            return page
+        if strength > best_strength:
+            best_page = page
+            best_strength = strength
+
+    # Search can miss a sequel whose title exists only as a manga block inside
+    # the parent article. Try short title roots, but accept only an exact block.
+    for title in _parent_page_title_candidates(query):
+        title_key = _title_key(title)
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        try:
+            page = client.page_data(title)
+        except Exception:
+            continue
+        if _page_manga_match_strength(page, query) == 3:
+            print(f"  - Wiki ComicInfo parent-page match: '{query}' -> '{page.title}'")
+            return page
+
+    if best_page is not None:
+        print(f"  - Wiki ComicInfo search fallback: '{query}' -> '{best_page.title}'")
+        return best_page
+
+    print(f"  - skip Wiki ComicInfo: no matching manga for '{query}'")
+    return None
+
+
+def _parent_page_title_candidates(query: str) -> list[str]:
+    """Small, bounded set of likely article roots for sequels and side stories."""
+    candidates = []
+
+    def add(value: str) -> None:
+        value = value.strip()
+        if value and _title_key(value) != _title_key(query) and value not in candidates:
+            candidates.append(value)
+
+    first_segment = re.split(r"[\s:：~～\-]+", query, maxsplit=1)[0]
+    add(first_segment)
+    without_number = re.sub(r"(?:[IVX]+|\d+)$", "", first_segment, flags=re.I).strip()
+    add(without_number)
+    han_prefix = re.match(r"[\u4e00-\u9fff]+", without_number)
+    if han_prefix and len(han_prefix.group()) > 2:
+        add(han_prefix.group()[:2])
+    han_suffix = re.search(r"[\u4e00-\u9fff]{2}$", without_number)
+    if han_suffix and len(without_number) > 2:
+        add(han_suffix.group())
+    return candidates[:4]
+
+
+def _page_manga_match_strength(page: WikiPageData, query: str) -> int:
+    """3: exact manga title, 2: related single manga, 1: related page only."""
+    try:
+        parsed = parse_wikitext(page.wikitext, query=query, page_title=page.title)
+    except Exception:
+        return 0
+
+    if parsed.main_manga is not None:
+        title = parsed.main_manga.title
+        if not title and parsed.manga_blocks[0] is parsed.main_manga:
+            title = page.title
+        if title and _match_key(title) == _match_key(query):
+            return 3
+        if len(parsed.manga_blocks) == 1 and _titles_related(query, title):
+            return 2
+        return 0
+
+    return 1 if _titles_related(query, page.title) else 0
+
+
+def _titles_related(query: str, title: Optional[str]) -> bool:
+    if not title:
+        return False
+    query_key = _match_key(query)
+    title_key = _match_key(title)
+    if query_key == title_key:
+        return True
+    if title_key.startswith("the"):
+        title_key = title_key[3:]
+    return len(title_key) >= 4 and title_key in query_key
 
 
 def _partial_wiki_series_from_page_data(page_data) -> WikiSeriesMetadata:

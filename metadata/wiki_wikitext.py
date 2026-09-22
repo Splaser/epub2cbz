@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import re
+import unicodedata
 from typing import Optional
 
 try:
@@ -526,7 +527,8 @@ def _query_tokens(query: str) -> list[str]:
 
 def _match_key(value: str) -> str:
     text = clean_wiki_text(value) or ""
-    return re.sub(r"[\s_\-:：・,，。·《》「」『』【】\[\]()（）]+", "", text).casefold()
+    text = unicodedata.normalize("NFKC", text)
+    return re.sub(r"[\W_]+", "", text).casefold()
 
 
 def parse_wikitext(
