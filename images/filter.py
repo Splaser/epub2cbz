@@ -75,6 +75,10 @@ def get_garbage_image_reason(img_path: str, val_mean_threshold=252) -> str | Non
     """
     try:
         size_kb = os.path.getsize(img_path) / 1024
+        # Both garbage-page rules below require a file smaller than 140 KB.
+        # Larger files cannot be filtered, so avoid decoding them for CV checks.
+        if size_kb >= 140:
+            return None
         im = Image.open(img_path).convert("RGB")
         arr = np.array(im)
 
