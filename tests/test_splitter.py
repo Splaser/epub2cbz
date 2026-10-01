@@ -5,44 +5,60 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from images.splitter import _tagged_tb_fallback_y, split_wide_image_if_needed
+from images.splitter import split_wide_image_if_needed
 
 
-class TaggedTbFallbackTests(unittest.TestCase):
+class TaggedSpreadTests(unittest.TestCase):
     def setUp(self):
         # A common portrait page ratio of 0.65. A 1264x1640 source splits into
         # two 820x1264 pages after the configured rotation, also ratio 0.65.
         self.common_page_size = (1040, 1600)
 
-    def test_accepts_tagged_spread_without_a_white_gutter(self):
-        image = Image.new("RGB", (1264, 1640), "black")
+    def test_continuous_spread_is_not_cut_even_when_halves_match_page_shape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "spread.png"
+            Image.new("RGB", (1264, 1640), "black").save(image_path)
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1):
+                result = split_wide_image_if_needed(
+                    str(image_path), temp_dir, common_page_size=self.common_page_size
+                )
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1640, 1264))
 
-        with patch("images.splitter.ROTATE_VERTICAL_SPLIT_PAGE", True):
-            self.assertEqual(
-                _tagged_tb_fallback_y(image, 1, self.common_page_size),
-                820,
-            )
+    def test_clean_separator_produces_two_upright_pages_in_reading_order(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "spread.png"
+            image = Image.new("RGB", (1264, 1640), "black")
+            image.paste("red", (0, 0, 1264, 795))
+            image.paste("white", (0, 795, 1264, 845))
+            image.save(image_path)
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1):
+                result = split_wide_image_if_needed(
+                    str(image_path), temp_dir, common_page_size=self.common_page_size
+                )
+            self.assertEqual(len(result), 2)
+            with Image.open(result[0]) as right, Image.open(result[1]) as left:
+                self.assertAlmostEqual(right.width, 820, delta=10)
+                self.assertAlmostEqual(left.width, 820, delta=10)
+                self.assertEqual(right.height, 1264)
+                self.assertEqual(left.height, 1264)
+                self.assertEqual(right.getpixel((400, 600)), (255, 0, 0))
+                self.assertEqual(left.getpixel((400, 600)), (0, 0, 0))
 
-    def test_rejects_untagged_image_with_the_same_shape(self):
-        image = Image.new("RGB", (1264, 1640), "black")
-
-        with patch("images.splitter.ROTATE_VERTICAL_SPLIT_PAGE", True):
-            self.assertIsNone(
-                _tagged_tb_fallback_y(image, None, self.common_page_size)
-            )
-
-    def test_rejects_tagged_cover_wrap_with_a_different_shape(self):
-        image = Image.new("RGB", (1181, 1680), "black")
-
-        with patch("images.splitter.ROTATE_VERTICAL_SPLIT_PAGE", True):
-            self.assertIsNone(
-                _tagged_tb_fallback_y(image, 1, self.common_page_size)
-            )
-
-    def test_requires_a_book_level_page_shape(self):
-        image = Image.new("RGB", (1264, 1640), "black")
-
-        self.assertIsNone(_tagged_tb_fallback_y(image, 1, None))
+    def test_unclean_gutter_is_not_accepted_via_relaxed_check(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "spread.png"
+            Image.new("RGB", (1264, 1640), "black").save(image_path)
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1), patch(
+                "images.splitter.find_clean_horizontal_gutter_y", return_value=(None, "projection", 820)
+            ):
+                result = split_wide_image_if_needed(
+                    str(image_path), temp_dir, common_page_size=self.common_page_size
+                )
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1640, 1264))
 
     def test_tagged_cover_does_not_fall_through_to_generic_tall_split(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -58,7 +74,43 @@ class TaggedTbFallbackTests(unittest.TestCase):
                     common_page_size=self.common_page_size,
                 )
 
-            self.assertEqual(result, [str(image_path)])
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1680, 763))
+
+    def test_rejected_jojo_title_spread_is_still_rotated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "title-spread.png"
+            image = Image.new("RGB", (943, 1280), "black")
+            image.paste("red", (0, 0, 943, 640))
+            image.save(image_path)
+
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1), patch(
+                "images.splitter.find_clean_horizontal_gutter_y", return_value=(None, "projection", None)
+            ):
+                result = split_wide_image_if_needed(
+                    str(image_path), temp_dir, common_page_size=(776, 1280)
+                )
+
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1280, 943))
+                self.assertEqual(rotated.getpixel((1000, 470)), (255, 0, 0))
+                self.assertEqual(rotated.getpixel((100, 470)), (0, 0, 0))
+
+    def test_rejected_gutter_candidate_is_still_rotated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "foldout.png"
+            Image.new("RGB", (943, 1280), "black").save(image_path)
+            with patch("images.splitter.get_epub_rotate_hint", return_value=1), patch(
+                "images.splitter.find_clean_horizontal_gutter_y", return_value=(640, "cv", None)
+            ), patch("images.splitter._tb_pre_split_skip_reason", return_value="common-page-part-aspect"):
+                result = split_wide_image_if_needed(
+                    str(image_path), temp_dir, common_page_size=(776, 1280)
+                )
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1280, 943))
 
     def test_rotate_zero_tall_page_is_never_split(self):
         with tempfile.TemporaryDirectory() as temp_dir:

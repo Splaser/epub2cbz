@@ -134,47 +134,6 @@ def has_clean_horizontal_separator(im: Image.Image, split_y: int) -> bool:
     return clean_bands >= 10
 
 
-def has_relaxed_horizontal_separator(im: Image.Image, split_y: int) -> bool:
-    """
-    Looser separator check for EPUB pages explicitly marked as rotated.
-    Chapter/title spreads can put logo text over the center gutter, so the strict
-    clean-band check may reject them even though the gutter is real.
-    """
-    w, h = im.size
-    if split_y <= 0 or split_y >= h:
-        return False
-
-    gray = np.asarray(im.convert("L"))
-    half_h = max(6, int(h * 0.005))
-    y0 = max(0, split_y - half_h)
-    y1 = min(h, split_y + half_h + 1)
-    x0 = int(w * 0.035)
-    x1 = int(w * 0.965)
-    band = gray[y0:y1, x0:x1]
-    if band.size == 0:
-        return False
-
-    white_ratio = float((band >= 242).mean())
-    dark_ratio = float((band <= 80).mean())
-    if white_ratio < 0.68 or dark_ratio > 0.08:
-        return False
-
-    band_count = 15
-    band_w = max(1, band.shape[1] // band_count)
-    usable_bands = 0
-    for i in range(band_count):
-        bx0 = i * band_w
-        bx1 = band.shape[1] if i == band_count - 1 else (i + 1) * band_w
-        local = band[:, bx0:bx1]
-        if local.size == 0:
-            continue
-        local_white = float((local >= 242).mean())
-        local_dark = float((local <= 80).mean())
-        if local_white >= 0.56 and local_dark <= 0.13:
-            usable_bands += 1
-
-    return usable_bands >= 9
-
 # --- New function for horizontal gutter detection ---
 def find_horizontal_gutter_y_cv(im: Image.Image) -> int | None:
     """
@@ -384,6 +343,13 @@ def _save_lr_split(im: Image.Image, split_x: int, out_dir: str, base: str, ext: 
 def rotate_split_part(im: Image.Image) -> Image.Image:
     """Rotate every page part produced by a top/bottom split."""
     return im.rotate(ROTATE_DEGREE, expand=True)
+
+
+def _save_unsplit_rotated_page(im: Image.Image, out_dir: str, base: str, ext: str) -> list[str]:
+    """Honor EPUB orientation even when the spread cannot be safely split."""
+    path = os.path.join(out_dir, f"{base}__ROTATED{ext}")
+    save_image_part(rotate_split_part(im), path)
+    return [path]
 
 
 # --- Helper to rotate all split parts if needed ---
@@ -1121,32 +1087,6 @@ def _tb_split_parts_match_common_aspect(
     return True
 
 
-def _tagged_tb_fallback_y(
-    im: Image.Image,
-    rotate_hint: int | None,
-    common_page_size: tuple[int, int] | None,
-) -> int | None:
-    """
-    Return a conservative center split for EPUB-declared rotated spreads.
-
-    Some Kmoe EPUBs concatenate two pages without leaving a white gutter.  In
-    that case pixel-only gutter detection has no candidate at all.  The rotate
-    metadata is useful, but is not sufficient by itself because cover wraps and
-    promotional foldouts may carry the same tag.  Only accept the fallback when
-    both resulting halves have the same aspect ratio as the book's dominant
-    single-page size.
-    """
-    if rotate_hint != 1 or common_page_size is None:
-        return None
-
-    _, h = im.size
-    split_y = h // 2
-    if not _tb_split_parts_match_common_aspect(im, split_y, common_page_size):
-        return None
-
-    return split_y
-
-
 def _tb_pre_split_skip_reason(
     im: Image.Image,
     split_y: int,
@@ -1237,8 +1177,8 @@ def split_wide_image_if_needed(
 ) -> List[str]:
     """
     对单张漫画图片拆分：
-    - 横置跨页拆成左右两页
-    - 上下堆叠拆成上下两页
+    - EPUB 横置跨页仅在有明确中缝时拆页
+    - 无可靠中缝时保留整张画面并转正
     - 末页/版权页保护
     """
     if not enable_split:
@@ -1262,22 +1202,12 @@ def split_wide_image_if_needed(
             if rotate_hint != 1:
                 return [img_path]
 
-            # Rotated double-page scans often show the real page separator as a
-            # horizontal white gutter. Detect this before the generic ratio rules.
+            # Rotated double-page scans show a real page separator as a
+            # horizontal white gutter. Require it before cutting the artwork.
             if w >= 800 and h >= 500:
                 split_y, split_reason, rejected_y = find_clean_horizontal_gutter_y(im)
                 if split_y is None and rejected_y is not None:
-                    if rotate_hint == 1 and has_relaxed_horizontal_separator(im, rejected_y):
-                        split_y = rejected_y
-                        split_reason = "rotate-tag"
-
-                if split_y is None:
-                    tagged_y = _tagged_tb_fallback_y(im, rotate_hint, common_page_size)
-                    if tagged_y is not None:
-                        split_y = tagged_y
-                        split_reason = "rotate-tag-half"
-                    elif rejected_y is not None:
-                        print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
+                    print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
 
                 if split_y is not None:
                     skip_reason = _tb_pre_split_skip_reason(
@@ -1289,56 +1219,15 @@ def split_wide_image_if_needed(
                     )
                     if skip_reason is not None:
                         print(f"  - keep [split-skip:{skip_reason}] {base} {w}x{h} y={split_y}")
-                        return [img_path]
+                        return _save_unsplit_rotated_page(im, out_dir, base, ext)
 
                     print(f"  - split [wide-TB:gutter-pre:{split_reason}] {base} {w}x{h} y={split_y}")
                     return _save_tb_split(im, split_y, out_dir, base, ext)
 
-            # A rotate tag can also describe a full cover wrap or foldout. If it
-            # did not pass the book-level spread-shape check above, do not let it
-            # fall through to the generic tall-image half split.
-            if rotate_hint == 1:
-                print(f"  - keep [split-skip:rotate-tag-nonspread-shape] {base} {w}x{h}")
-                return [img_path]
-
-            # 横向拆分：优先识别中间白色装订/分割线，再退回到 w//2
-            if w / h >= 1.25:
-                if h > w:  # 纵图横置情况
-                    im = im.rotate(ROTATE_DEGREE, expand=True)
-                    w, h = im.size
-
-                split_x = find_vertical_gutter_x(im)
-                if split_x is not None:
-                    print(f"  - split [wide-LR:gutter] {base} {w}x{h} x={split_x}")
-                    return _save_lr_split(im, split_x, out_dir, base, ext)
-
-                if w / h < 1.35:
-                    return [img_path]
-
-                split_x = w // 2
-                print(f"  - split [wide-LR:half] {base} {w}x{h} x={split_x}")
-                return _save_lr_split(im, split_x, out_dir, base, ext)
-            
-            # 上下堆叠拆分：优先用真实水平 gutter；找不到时才退回 h//2。
-            if h / w >= 1.65 and w >= 400:
-                split_y, split_reason, rejected_y = find_clean_horizontal_gutter_y(im)
-                if split_y is None and rejected_y is not None:
-                    print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
-                if split_y is None:
-                    if h / w < 2.0:
-                        return [img_path]
-                    split_y = h // 2
-                    split_reason = "half"
-
-                skip_reason = _stacked_tb_skip_reason(im, split_y, split_reason)
-                if skip_reason is not None:
-                    print(f"  - keep [split-skip:{skip_reason}] {base} {w}x{h} y={split_y}")
-                    return [img_path]
-
-                print(f"  - split [vertical-TB:{split_reason}] {base} {w}x{h} y={split_y}")
-                return _save_tb_split(im, split_y, out_dir, base, ext)
-
-            return [img_path]
+            # Rotation metadata describes orientation, not a safe cutting line.
+            # Preserve continuous artwork whenever no clean separator is found.
+            print(f"  - rotate [split-skip:no-clean-separator] {base} {w}x{h}")
+            return _save_unsplit_rotated_page(im, out_dir, base, ext)
 
     except Exception as e:
         print(f"  - split failed [{base}]: {e}")
