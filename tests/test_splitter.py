@@ -26,7 +26,7 @@ class TaggedSpreadTests(unittest.TestCase):
             with Image.open(result[0]) as rotated:
                 self.assertEqual(rotated.size, (1640, 1264))
 
-    def test_clean_separator_produces_two_upright_pages_in_reading_order(self):
+    def test_clean_separator_does_not_trigger_top_bottom_split(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "spread.png"
             image = Image.new("RGB", (1264, 1640), "black")
@@ -37,14 +37,11 @@ class TaggedSpreadTests(unittest.TestCase):
                 result = split_wide_image_if_needed(
                     str(image_path), temp_dir, common_page_size=self.common_page_size
                 )
-            self.assertEqual(len(result), 2)
-            with Image.open(result[0]) as right, Image.open(result[1]) as left:
-                self.assertAlmostEqual(right.width, 820, delta=10)
-                self.assertAlmostEqual(left.width, 820, delta=10)
-                self.assertEqual(right.height, 1264)
-                self.assertEqual(left.height, 1264)
-                self.assertEqual(right.getpixel((400, 600)), (255, 0, 0))
-                self.assertEqual(left.getpixel((400, 600)), (0, 0, 0))
+            self.assertEqual(len(result), 1)
+            with Image.open(result[0]) as rotated:
+                self.assertEqual(rotated.size, (1640, 1264))
+                self.assertEqual(rotated.getpixel((1200, 600)), (255, 0, 0))
+                self.assertEqual(rotated.getpixel((400, 600)), (0, 0, 0))
 
     def test_unclean_gutter_is_not_accepted_via_relaxed_check(self):
         with tempfile.TemporaryDirectory() as temp_dir:

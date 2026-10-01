@@ -1176,9 +1176,9 @@ def split_wide_image_if_needed(
     common_page_size: tuple[int, int] | None = None,
 ) -> List[str]:
     """
-    对单张漫画图片拆分：
-    - EPUB 横置跨页仅在有明确中缝时拆页
-    - 无可靠中缝时保留整张画面并转正
+    处理 EPUB 图片方向：
+    - 禁止上下拆页，避免把分格白线误判成页间中缝
+    - rotate:1 仅用于转正，始终保留整张画面
     - 末页/版权页保护
     """
     if not enable_split:
@@ -1192,41 +1192,14 @@ def split_wide_image_if_needed(
             w, h = im.size
             base = os.path.splitext(os.path.basename(img_path))[0]
             ext = os.path.splitext(img_path)[1].lower()
-            is_common_page_size = _matches_common_page_size(w, h, common_page_size)
             rotate_hint = get_epub_rotate_hint(img_path)
 
-            # EPUB page splitting is opt-in.  Heuristic-only splitting can turn
-            # unusually tall title pages, bonus art, or cover material into two
-            # near-square fragments.  Only images explicitly declared as
-            # rotated spreads by the EPUB are eligible for splitting.
+            # Rotation metadata says nothing about whether artwork may be cut.
+            # Preserve each EPUB image as one CBZ entry, including panel gutters.
             if rotate_hint != 1:
                 return [img_path]
 
-            # Rotated double-page scans show a real page separator as a
-            # horizontal white gutter. Require it before cutting the artwork.
-            if w >= 800 and h >= 500:
-                split_y, split_reason, rejected_y = find_clean_horizontal_gutter_y(im)
-                if split_y is None and rejected_y is not None:
-                    print(f"  - keep [split-skip:unclean-horizontal-gutter] {base} {w}x{h} y={rejected_y}")
-
-                if split_y is not None:
-                    skip_reason = _tb_pre_split_skip_reason(
-                        im,
-                        split_y,
-                        is_common_page_size,
-                        common_page_size,
-                        rotate_hint=rotate_hint,
-                    )
-                    if skip_reason is not None:
-                        print(f"  - keep [split-skip:{skip_reason}] {base} {w}x{h} y={split_y}")
-                        return _save_unsplit_rotated_page(im, out_dir, base, ext)
-
-                    print(f"  - split [wide-TB:gutter-pre:{split_reason}] {base} {w}x{h} y={split_y}")
-                    return _save_tb_split(im, split_y, out_dir, base, ext)
-
-            # Rotation metadata describes orientation, not a safe cutting line.
-            # Preserve continuous artwork whenever no clean separator is found.
-            print(f"  - rotate [split-skip:no-clean-separator] {base} {w}x{h}")
+            print(f"  - rotate [epub-rotate-tag:preserve-whole-page] {base} {w}x{h}")
             return _save_unsplit_rotated_page(im, out_dir, base, ext)
 
     except Exception as e:
