@@ -1,7 +1,10 @@
 import argparse
+import html
 import os
+import re
 import tempfile
 import shutil
+from typing import Callable, Optional
 from images.filter import get_garbage_image_reason, filter_html_files, is_image_file
 from builder.cbz_builder import make_cbz
 from metadata.epub_comicinfo import (
@@ -9,6 +12,7 @@ from metadata.epub_comicinfo import (
     load_exact_wiki_series_for_dir,
     load_wiki_series_for_url,
 )
+from metadata.wiki_models import WikiSearchItem
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
 from images.splitter import infer_common_page_size, split_wide_image_if_needed
@@ -104,10 +108,50 @@ def parse_args():
     return parser.parse_args()
 
 
+def choose_wiki_candidate(
+    query: str,
+    candidates: list[WikiSearchItem],
+    *,
+    input_func: Callable[[str], str] = input,
+) -> Optional[str]:
+    print(f"\n找到多个 Wiki 候选，请选择“{query}”对应的条目：")
+    for index, candidate in enumerate(candidates, start=1):
+        snippet = _plain_wiki_snippet(candidate.snippet)
+        suffix = f" — {snippet}" if snippet else ""
+        print(f"  {index}. {candidate.title}{suffix}")
+    print("  0. 跳过 Wiki 元数据")
+
+    while True:
+        try:
+            choice = input_func(f"请输入编号 [0-{len(candidates)}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n未选择 Wiki 条目，跳过元数据。")
+            return None
+
+        if choice == "0":
+            return None
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(candidates):
+                return candidates[index - 1].title
+        print("输入无效，请输入列表中的编号。")
+
+
+def _plain_wiki_snippet(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    text = re.sub(r"<[^>]+>", "", value)
+    text = " ".join(html.unescape(text).split())
+    return text[:120]
+
+
 def load_wiki_metadata_for_main(base_dir, wiki_url=None):
     if wiki_url:
         return load_wiki_series_for_url(base_dir, wiki_url)
-    return load_exact_wiki_series_for_dir(base_dir)
+    return load_exact_wiki_series_for_dir(
+        base_dir,
+        candidate_selector=choose_wiki_candidate,
+    )
 
 
 if __name__ == "__main__":

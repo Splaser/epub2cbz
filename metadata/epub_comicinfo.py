@@ -5,7 +5,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import re
-from typing import Optional
+from typing import Callable, Optional
 
 from utils.metadata_utils import (
     clean_raw_name,
@@ -15,14 +15,14 @@ from utils.metadata_utils import (
 )
 
 from .wiki_client import WikiClient
-from .wiki_models import WikiMangaInfo, WikiPageData, WikiSeriesMetadata
+from .wiki_models import WikiMangaInfo, WikiPageData, WikiSearchItem, WikiSeriesMetadata
 from .wiki_scraper import build_series_metadata_from_page_data
 from .wiki_to_comicinfo import wiki_series_to_comicinfo
 from .wiki_wikitext import _match_key, parse_wikitext
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 6
+SERIES_METADATA_CACHE_VERSION = 7
 
 
 # Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.
@@ -31,11 +31,14 @@ WIKI_TITLE_OVERRIDES = {
     "死神": "BLEACH",
 }
 
+WikiCandidateSelector = Callable[[str, list[WikiSearchItem]], Optional[str]]
+
 def load_exact_wiki_series_for_dir(
     series_dir: str | Path,
     *,
     client: Optional[WikiClient] = None,
     use_cache: bool = True,
+    candidate_selector: Optional[WikiCandidateSelector] = None,
 ) -> Optional[WikiSeriesMetadata]:
     """
     Try to load Wiki metadata for a series directory.
@@ -62,7 +65,11 @@ def load_exact_wiki_series_for_dir(
             return cached
 
     wiki_client = client or WikiClient()
-    page_data = _find_wiki_page_with_manga(wiki_client, lookup_title)
+    page_data = _find_wiki_page_with_manga(
+        wiki_client,
+        lookup_title,
+        candidate_selector=candidate_selector,
+    )
     if page_data is None:
         return None
 
@@ -87,7 +94,12 @@ def load_exact_wiki_series_for_dir(
     return series
 
 
-def _find_wiki_page_with_manga(client: WikiClient, query: str) -> Optional[WikiPageData]:
+def _find_wiki_page_with_manga(
+    client: WikiClient,
+    query: str,
+    *,
+    candidate_selector: Optional[WikiCandidateSelector] = None,
+) -> Optional[WikiPageData]:
     """Prefer an exact manga block, even when several works share one Wiki page."""
     seen_titles = set()
     best_page = None
@@ -105,11 +117,27 @@ def _find_wiki_page_with_manga(client: WikiClient, query: str) -> Optional[WikiP
             best_strength = strength
         seen_titles.add(_title_key(direct_page.title))
 
-    try:
-        results = client.search(query, limit=5)
-    except Exception as exc:
-        print(f"  - Wiki ComicInfo search unavailable for '{query}' ({exc})")
-        results = []
+    results = _search_wiki_candidates(
+        client,
+        query,
+        include_manga_search=candidate_selector is not None,
+    )
+
+    if candidate_selector is not None and len(results) > 1:
+        selected_title = candidate_selector(query, results)
+        if not selected_title:
+            print(f"  - skip Wiki ComicInfo: no candidate selected for '{query}'")
+            return None
+        try:
+            selected_page = client.page_data(selected_title)
+        except Exception as exc:
+            print(
+                "  - skip Wiki ComicInfo selected page: "
+                f"'{selected_title}' failed ({exc})"
+            )
+            return None
+        print(f"  - Wiki ComicInfo selected: '{query}' -> '{selected_page.title}'")
+        return selected_page
 
     for result in results:
         title_key = _title_key(result.title)
@@ -150,6 +178,36 @@ def _find_wiki_page_with_manga(client: WikiClient, query: str) -> Optional[WikiP
 
     print(f"  - skip Wiki ComicInfo: no matching manga for '{query}'")
     return None
+
+
+def _search_wiki_candidates(
+    client: WikiClient,
+    query: str,
+    *,
+    include_manga_search: bool,
+) -> list[WikiSearchItem]:
+    searches = (
+        [(f"{query} 漫画", 5), (query, 10)]
+        if include_manga_search
+        else [(query, 5)]
+    )
+    results = []
+    seen_titles = set()
+    for search_query, limit in searches:
+        try:
+            batch = client.search(search_query, limit=limit)
+        except Exception as exc:
+            print(f"  - Wiki ComicInfo search unavailable for '{search_query}' ({exc})")
+            continue
+        for item in batch:
+            title_key = _title_key(item.title)
+            if title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            results.append(item)
+            if include_manga_search and len(results) >= 10:
+                return results
+    return results
 
 
 def _parent_page_title_candidates(query: str) -> list[str]:

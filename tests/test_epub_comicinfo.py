@@ -75,6 +75,22 @@ class _CandidateWikiClient:
         ]
 
 
+class _InteractiveSearchWikiClient(_CandidateWikiClient):
+    def __init__(self, pages, manga_titles, general_titles):
+        super().__init__(pages)
+        self.manga_titles = manga_titles
+        self.general_titles = general_titles
+        self.search_calls = []
+
+    def search(self, query, *, limit=5):
+        self.search_calls.append((query, limit))
+        titles = self.manga_titles if query.endswith(" 漫画") else self.general_titles
+        return [
+            WikiSearchItem(title=title, pageid=self.pages[title].pageid)
+            for title in titles[:limit]
+        ]
+
+
 def _page_data() -> WikiPageData:
     return WikiPageData(
         requested_title="JOJO的奇妙冒險9 JOJO Lands",
@@ -214,7 +230,7 @@ class MetadataCacheVersionTests(unittest.TestCase):
             cache_path = Path(temp_dir) / "series.meta.json"
             cache_path.write_text(
                 json.dumps({
-                    "schema_version": 5,
+                    "schema_version": 6,
                     "series_name": "膽大黨",
                     "metadata": {},
                 }),
@@ -227,6 +243,99 @@ class MetadataCacheVersionTests(unittest.TestCase):
             )
 
         self.assertIsNone(result)
+
+
+class InteractiveWikiSelectionTests(unittest.TestCase):
+    def test_selected_search_result_bypasses_automatic_title_guessing(self):
+        manga_page = WikiPageData(
+            requested_title="三國志 (橫山光輝漫畫)",
+            title="三國志 (橫山光輝漫畫)",
+            pageid=1,
+            wikitext="wiki manga source",
+            page_url="https://zh.wikipedia.org/wiki/manga",
+        )
+        novel_page = WikiPageData(
+            requested_title="三國演義",
+            title="三國演義",
+            pageid=2,
+            wikitext="wiki novel source",
+            page_url="https://zh.wikipedia.org/wiki/novel",
+        )
+        client = _CandidateWikiClient([manga_page, novel_page])
+        parsed = WikiSeriesMetadata(
+            page_title="三國演義",
+            pageid=2,
+            page_url=novel_page.page_url,
+            wikibase_item=None,
+            summary=None,
+            main_manga=WikiMangaInfo(title="三國演義"),
+        )
+        selections = []
+
+        def select(query, candidates):
+            selections.append((query, [item.title for item in candidates]))
+            return "三國演義"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "metadata.epub_comicinfo.build_series_metadata_from_page_data",
+            return_value=parsed,
+        ) as build:
+            series_dir = Path(temp_dir) / "三国志"
+            series_dir.mkdir()
+            result = load_exact_wiki_series_for_dir(
+                series_dir,
+                client=client,
+                use_cache=False,
+                candidate_selector=select,
+            )
+
+        self.assertIs(result, parsed)
+        self.assertEqual(
+            selections,
+            [("三国志", ["三國志 (橫山光輝漫畫)", "三國演義"])],
+        )
+        build.assert_called_once_with(novel_page, query="三国志")
+
+    def test_manga_search_results_are_merged_first_and_deduplicated(self):
+        pages = [
+            WikiPageData(
+                requested_title=title,
+                title=title,
+                pageid=index,
+                wikitext="wiki source",
+            )
+            for index, title in enumerate(
+                ["三國志 (漫畫)", "三國演義", "三國 (電視劇)"],
+                start=1,
+            )
+        ]
+        client = _InteractiveSearchWikiClient(
+            pages,
+            manga_titles=["三國志 (漫畫)", "三國演義"],
+            general_titles=["三國演義", "三國 (電視劇)"],
+        )
+        selected_candidates = []
+
+        def select(_query, candidates):
+            selected_candidates.extend(item.title for item in candidates)
+            return None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            series_dir = Path(temp_dir) / "三国志"
+            series_dir.mkdir()
+            result = load_exact_wiki_series_for_dir(
+                series_dir,
+                client=client,
+                use_cache=False,
+                candidate_selector=select,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(client.search_calls, [("三国志 漫画", 5), ("三国志", 10)])
+        self.assertEqual(
+            selected_candidates,
+            ["三國志 (漫畫)", "三國演義", "三國 (電視劇)"],
+        )
 
 
 class SpecialComicInfoTests(unittest.TestCase):
