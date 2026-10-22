@@ -5,6 +5,19 @@ from metadata.wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
 class WikiTagFilteringTests(unittest.TestCase):
+    def test_wiki_people_map_to_kavita_comicinfo_roles(self):
+        wiki = self._wiki(categories=[])
+        wiki.main_manga.author = ["坂井音太"]
+        wiki.main_manga.penciller = ["恩田千路", "内藤らぶ"]
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.writer, ["坂井音太"])
+        self.assertEqual(comic_info.penciller, ["恩田千路", "内藤らぶ"])
+        xml = comic_info.to_xml_string()
+        self.assertIn("<Writer>坂井音太</Writer>", xml)
+        self.assertIn("<Penciller>恩田千路, 内藤らぶ</Penciller>", xml)
+
     def test_only_wikipedia_maintenance_categories_are_filtered(self):
         garbage_categories = [
             "CS1含有日語文本 (ja)",

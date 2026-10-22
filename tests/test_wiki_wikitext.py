@@ -104,6 +104,34 @@ class PublisherFieldTests(unittest.TestCase):
         self.assertEqual(parsed.main_manga.hongkong_publishers, ["文化傳信"])
 
 
+class MangaPeopleFieldTests(unittest.TestCase):
+    def test_original_author_and_artists_map_to_separate_kavita_roles(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|標題 = 我把姊姊的肚子養大了
+|原作 = 原作：[[坂井音太]]
+|作畫 = [[恩田千路]]→[[内藤らぶ]]
+|冊數 = 全4冊
+}}
+""")
+
+        self.assertIsNotNone(parsed.main_manga)
+        self.assertEqual(parsed.main_manga.author, ["坂井音太"])
+        self.assertEqual(parsed.main_manga.penciller, ["恩田千路", "内藤らぶ"])
+
+    def test_simplified_artist_field_is_supported(self):
+        parsed = parse_wikitext("""
+{{Infobox animanga/Manga
+|标题 = Example
+|原作 = Writer
+|作画 = Artist
+}}
+""")
+
+        self.assertEqual(parsed.main_manga.author, ["Writer"])
+        self.assertEqual(parsed.main_manga.penciller, ["Artist"])
+
+
 class MangaBlockSelectionTests(unittest.TestCase):
     def test_untitled_main_manga_and_named_sequel_select_separately(self):
         wikitext = """

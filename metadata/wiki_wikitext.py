@@ -243,6 +243,35 @@ def split_clean_list(value: Optional[str]) -> list[str]:
     return result
 
 
+def split_people_list(*values: Optional[str]) -> list[str]:
+    """Normalize Wiki person fields into Kavita's comma-safe name list."""
+    combined = "<br>".join(value for value in values if value)
+    if not combined:
+        return []
+
+    # Wiki commonly uses arrows when an artist changes during serialization.
+    combined = re.sub(r"(?:→|⇒|➜|➝|⟶)|[\r\n]+", "<br>", combined)
+    people = split_clean_list(combined)
+    result = []
+    seen = set()
+    for person in people:
+        # Some values repeat their role even though the template field already
+        # carries it, e.g. "原作：畠中惠".
+        person = re.sub(
+            r"^(?:作者|原作|作畫|作画|漫畫|漫画|角色原案|人物原案)\s*[：:]\s*",
+            "",
+            person,
+        ).strip()
+        if not person:
+            continue
+        key = person.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(person)
+    return result
+
+
 def parse_count(value: Optional[str]) -> Optional[int]:
     text = clean_wiki_text(value)
     if not text:
@@ -350,7 +379,8 @@ def parse_manga_block(
         title=clean_wiki_text(fields.get("標題") or fields.get("title")),
         original_title=header.original_title if header else None,
         english_title=header.english_title if header else None,
-        author=split_clean_list(fields.get("作者")),
+        author=split_people_list(fields.get("作者"), fields.get("原作")),
+        penciller=split_people_list(fields.get("作畫"), fields.get("作画")),
         publishers=publishers["all"],
         taiwan_publishers=publishers["taiwan"],
         hongkong_publishers=publishers["hongkong"],

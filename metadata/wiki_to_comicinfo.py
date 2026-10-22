@@ -87,6 +87,7 @@ def wiki_series_to_comicinfo(
         summary=wiki.summary,
         year=_extract_year(manga_info.start),
         writer=_display_list(manga_info.author),
+        penciller=_display_list(manga_info.penciller),
         publisher=_display_publisher(_preferred_publisher(manga_info)),
         imprint=manga_info.label,
         genre=_genres_from_wiki(manga_info, wiki.categories),

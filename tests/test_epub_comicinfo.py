@@ -214,7 +214,7 @@ class MetadataCacheVersionTests(unittest.TestCase):
             cache_path = Path(temp_dir) / "series.meta.json"
             cache_path.write_text(
                 json.dumps({
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "series_name": "膽大黨",
                     "metadata": {},
                 }),

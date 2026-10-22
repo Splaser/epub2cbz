@@ -22,7 +22,7 @@ from .wiki_wikitext import _match_key, parse_wikitext
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 5
+SERIES_METADATA_CACHE_VERSION = 6
 
 
 # Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.
@@ -325,6 +325,7 @@ def wiki_series_from_cache_dict(data: dict) -> WikiSeriesMetadata:
             original_title=manga_data.get("original_title"),
             english_title=manga_data.get("english_title"),
             author=list(manga_data.get("author") or []),
+            penciller=list(manga_data.get("penciller") or []),
             publishers=list(manga_data.get("publishers") or []),
             taiwan_publishers=list(manga_data.get("taiwan_publishers") or []),
             hongkong_publishers=list(manga_data.get("hongkong_publishers") or []),

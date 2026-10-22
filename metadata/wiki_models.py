@@ -55,6 +55,7 @@ class WikiMangaInfo:
     original_title: Optional[str] = None
     english_title: Optional[str] = None
     author: list[str] = field(default_factory=list)
+    penciller: list[str] = field(default_factory=list)
     publishers: list[str] = field(default_factory=list)
     taiwan_publishers: list[str] = field(default_factory=list)
     hongkong_publishers: list[str] = field(default_factory=list)
