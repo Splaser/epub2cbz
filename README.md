@@ -91,6 +91,28 @@ epub2cbz.exe
 漫画名 - 特典.cbz
 ```
 
+程序默认根据系列目录名查询中文维基百科。当目录名是出版社译名、简称，无法稳定对应
+Wiki 条目时，可用 `--wiki-url` 显式指定整批 EPUB 共用的元数据来源：
+
+```bash
+epub2cbz.exe --wiki-url "https://zh.wikipedia.org/wiki/JoJolion"
+```
+
+成功获取的系列资料会缓存为当前目录的 `series.meta.json`，并写入每个新生成 CBZ 根目录下的
+`ComicInfo.xml`。
+
+对于已经生成的 CBZ，可用相同的 Wiki URL 批量补写 `ComicInfo.xml`：
+
+```powershell
+python comicinfo_repair.py `
+  --dir "E:\Books\JOJO的奇妙冒險8 JOJO利昂" `
+  --wiki-url "https://zh.wikipedia.org/wiki/JoJolion" `
+  --write
+```
+
+`--dir` 会处理该目录下的全部 CBZ；必须提供 `--write` 才会实际修改文件，省略时仅预览结果。
+本地目录名仍作为 ComicInfo 的系列名，Wiki URL 只负责提供作者、出版社、总册数、简介、标签等资料。
+
 ### PDF
 
 1. 将 `pdf2cbz.exe` 放在 PDF 系列目录，例如 `掌机迷/`
