@@ -19,6 +19,17 @@
 
 ---
 
+## 独立 CBZ 单页旋转校正
+
+工具位于 [`tools/cbz_page_rotator`](tools/cbz_page_rotator)，用于手动修正已经生成的 CBZ 页面方向，不进行 OCR。
+
+1. Windows 下双击该目录的 `build.bat` 编译，或在命令行运行 `build.cmd`。
+2. 打开生成的 `CBZPageRotator.exe`，选择或拖入 CBZ，按页码预览并旋转。
+3. 点击“保存 · 直接替换”写回原 CBZ，不保留备份。未修改条目的图片字节保持不变。
+
+该工具不依赖 Python，使用 Windows .NET Framework 4.7.2 或更高版本。
+运行 `test.cmd` 可验证旋转和原地保存行为；exe、预览图和临时文件不提交到 Git。
+
 ## 安装依赖
 
 使用 Python 3.10+ 建议：
