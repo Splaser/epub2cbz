@@ -307,7 +307,7 @@ def resolve_series_title(cbz_path: Path, args: argparse.Namespace) -> Optional[s
     return None
 
 
-def infer_volume_number(filename: str) -> int:
+def infer_volume_number(filename: str) -> int | str:
     volume_number = infer_shared_volume_number(filename)
     if volume_number is not None:
         return volume_number

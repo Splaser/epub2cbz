@@ -259,6 +259,20 @@ class SpecialComicInfoTests(unittest.TestCase):
         self.assertEqual(comicinfo.format, "Special")
         self.assertEqual(comicinfo.number, "2")
 
+    def test_decimal_side_story_keeps_decimal_number(self):
+        epub_path = "E:/Books/範馬刃牙/[Kmoe][範馬刃牙]卷10.5外傳.epub"
+        xml = build_comicinfo_xml_for_epub(
+            epub_path=epub_path,
+            output_cbz_name="範馬刃牙 - 外傳 第010.5册.cbz",
+            page_count=50,
+            wiki_series=self._wiki(),
+        )
+
+        comicinfo = ComicInfo.from_xml_bytes(xml)
+        self.assertEqual(comicinfo.title, "卷10.5外傳")
+        self.assertEqual(comicinfo.format, "Special")
+        self.assertEqual(comicinfo.number, "10.5")
+
     def test_repair_style_cbz_name_does_not_repeat_series_in_special_title(self):
         xml = build_comicinfo_xml_for_epub(
             epub_path="E:/Books/測試系列/測試系列 - 畫冊.cbz",

@@ -19,7 +19,29 @@ def extract_special_label(cleaned: str) -> str | None:
     return None
 
 
-def extract_special_volume(cleaned: str) -> int | None:
+def normalize_volume_number(value: str) -> int | str:
+    """Return integers as int and preserve meaningful decimal volume parts."""
+    normalized = value.translate(str.maketrans("０１２３４５６７８９．", "0123456789."))
+    if "." not in normalized:
+        return int(normalized)
+
+    whole, fraction = normalized.split(".", 1)
+    fraction = fraction.rstrip("0")
+    if not fraction:
+        return int(whole)
+    return f"{int(whole)}.{fraction}"
+
+
+def format_volume_number(value: int | str) -> str:
+    """Pad the integer part while retaining a decimal suffix such as .5."""
+    text = str(value)
+    if "." not in text:
+        return f"{int(text):03d}"
+    whole, fraction = text.split(".", 1)
+    return f"{int(whole):03d}.{fraction}"
+
+
+def extract_special_volume(cleaned: str) -> int | str | None:
     """Extract a real issue number without treating an anniversary as one."""
     for pattern in VOL_PATTERN_LIST:
         match = re.search(pattern, cleaned, re.IGNORECASE)
@@ -32,7 +54,7 @@ def extract_special_volume(cleaned: str) -> int | None:
         if re.match(r"\s*(?:週年|周年)", following_text):
             continue
 
-        return int(match.group(1))
+        return normalize_volume_number(match.group(1))
 
     return None
 
@@ -173,7 +195,7 @@ def build_output_cbz_name(
         vol = extract_special_volume(cleaned)
 
         if vol is not None:
-            return f"{series_name} - {special_kw} 第{vol:03d}册.cbz"
+            return f"{series_name} - {special_kw} 第{format_volume_number(vol)}册.cbz"
 
         return f"{series_name} - {cleaned}.cbz"
 
@@ -182,11 +204,11 @@ def build_output_cbz_name(
     for p in VOL_PATTERN_LIST:  # 从 consts.py 统一抽正则
         m = re.search(p, cleaned, re.IGNORECASE)
         if m:
-            vol = int(m.group(1))
+            vol = normalize_volume_number(m.group(1))
             break
     if vol is not None:
         unit = "期" if is_periodical else "卷"
-        return f"{series_name} - 第{vol:03d}{unit}.cbz"
+        return f"{series_name} - 第{format_volume_number(vol)}{unit}.cbz"
 
     # 4) 保底
     return f"{series_name} - {cleaned}.cbz"

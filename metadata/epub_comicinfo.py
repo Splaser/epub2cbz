@@ -10,6 +10,7 @@ from typing import Optional
 from utils.metadata_utils import (
     clean_raw_name,
     extract_special_label,
+    normalize_volume_number,
     strip_regional_edition_suffix,
 )
 
@@ -385,15 +386,16 @@ def build_comicinfo_xml_for_epub(
     return comicinfo.to_xml_bytes()
 
 
-def infer_volume_number(filename: str) -> Optional[int]:
+def infer_volume_number(filename: str) -> Optional[int | str]:
     import re
 
-    normalized = filename.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    normalized = filename.translate(str.maketrans("０１２３４５６７８９．", "0123456789."))
 
     patterns = (
-        r"第\s*0*(\d+)\s*[卷冊册]",
-        r"vol(?:ume)?\.?\s*0*(\d+)",
-        r"[_\-\s]0*(\d{1,3})(?=\D*$)",
+        r"第\s*0*(\d+(?:\.\d+)?)\s*[卷冊册]",
+        r"[卷期]\s*0*(\d+(?:\.\d+)?)",
+        r"vol(?:ume)?\.?\s*0*(\d+(?:\.\d+)?)",
+        r"[_\-\s]0*(\d{1,3}(?:\.\d+)?)(?=\D*$)",
     )
 
     for pattern in patterns:
@@ -405,7 +407,7 @@ def infer_volume_number(filename: str) -> Optional[int]:
             following_text = normalized[match.end():]
             if re.match(r"\s*(?:週年|周年)", following_text):
                 continue
-            return int(match.group(1))
+            return normalize_volume_number(match.group(1))
 
     return None
 

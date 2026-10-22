@@ -87,6 +87,12 @@ class RepairMetadataTests(unittest.TestCase):
             12,
         )
 
+    def test_decimal_volume_number_is_preserved(self):
+        self.assertEqual(
+            infer_volume_number("範馬刃牙 - 外傳 第010.5册.cbz"),
+            "10.5",
+        )
+
     def test_repair_writes_edition_count_and_kavita_year(self):
         wiki = WikiSeriesMetadata(
             page_title="足球小將",

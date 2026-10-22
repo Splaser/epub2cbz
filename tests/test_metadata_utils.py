@@ -91,6 +91,25 @@ class SpecialNameTests(unittest.TestCase):
             "測試系列 - 番外 第002册.cbz",
         )
 
+    def test_decimal_side_story_volume_is_preserved(self):
+        path = "E:/Books/範馬刃牙/[Kmoe][範馬刃牙]卷10.5外傳.epub"
+        output_name = build_output_cbz_name(path)
+
+        self.assertEqual(
+            output_name,
+            "範馬刃牙 - 外傳 第010.5册.cbz",
+        )
+        self.assertEqual(infer_volume_number(path), "10.5")
+        self.assertEqual(infer_volume_number(output_name), "10.5")
+
+    def test_decimal_regular_volume_is_preserved(self):
+        path = "E:/Books/測試系列/卷10.5.epub"
+
+        self.assertEqual(
+            build_output_cbz_name(path),
+            "測試系列 - 第010.5卷.cbz",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
