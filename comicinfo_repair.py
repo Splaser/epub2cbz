@@ -10,7 +10,12 @@ import sys
 import zipfile
 from typing import Any, Optional
 
-from utils.metadata_utils import clean_raw_name, extract_special_label
+from utils.metadata_utils import (
+    clean_series_title,
+    extract_special_label,
+    extract_volume_number,
+    strip_series_prefix,
+)
 
 from metadata.comicinfo_archive import (
     find_comicinfo_entry_name,
@@ -240,14 +245,13 @@ def process_cbz(
         raise FileNotFoundError(cbz_path)
 
     series_title = resolve_series_title(cbz_path, args)
-    cleaned_title = clean_raw_name(cbz_path.stem)
+    title = cbz_path.stem
     if series_title:
-        series_prefix = f"{series_title} - "
-        if cleaned_title.casefold().startswith(series_prefix.casefold()):
-            cleaned_title = cleaned_title[len(series_prefix):].strip()
+        title = strip_series_prefix(title, series_title)
+    cleaned_title = clean_series_title(title, cbz_path.parent.name)
 
     is_special = extract_special_label(cleaned_title) is not None
-    volume_number = infer_shared_volume_number(cbz_path.name)
+    volume_number = extract_volume_number(cleaned_title)
     if volume_number is None and not is_special:
         print(f"  - skip ComicInfo: Cannot infer volume number from filename: {cbz_path.name}")
         return

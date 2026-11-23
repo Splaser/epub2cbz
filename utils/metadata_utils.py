@@ -41,8 +41,8 @@ def format_volume_number(value: int | str) -> str:
     return f"{int(whole):03d}.{fraction}"
 
 
-def extract_special_volume(cleaned: str) -> int | str | None:
-    """Extract a real issue number without treating an anniversary as one."""
+def extract_volume_number(cleaned: str) -> int | str | None:
+    """Parse a volume or issue from a title shared by naming and ComicInfo."""
     for pattern in VOL_PATTERN_LIST:
         match = re.search(pattern, cleaned, re.IGNORECASE)
         if not match:
@@ -108,6 +108,19 @@ def clean_raw_name(raw_name: str) -> str:
     return cleaned
 
 
+def strip_series_prefix(title: str, series_name: str) -> str:
+    for series in (series_name, strip_regional_edition_suffix(series_name)):
+        prefix = f"{series} - "
+        if title.casefold().startswith(prefix.casefold()):
+            return title[len(prefix):].strip()
+    return title
+
+
+def clean_series_title(raw_name: str, series_name: str) -> str:
+    title = strip_series_prefix(raw_name, series_name)
+    return strip_series_prefix(clean_raw_name(title), series_name)
+
+
 def extract_series_name(path_or_name: str) -> str:
     path_or_name = str(path_or_name).replace("\\", "/")
 
@@ -151,12 +164,11 @@ def build_output_cbz_name(
 ) -> str:
     raw_name = os.path.splitext(os.path.basename(epub_path))[0]
 
-    series_name = (series_name or extract_series_name(epub_path) or "").strip()
-    if not series_name:
-        series_name = clean_raw_name(raw_name).strip() or "Unknown"
-    series_name = strip_regional_edition_suffix(series_name)
-    
-    cleaned = clean_raw_name(raw_name)
+    folder_series = extract_series_name(epub_path) or clean_raw_name(raw_name) or "Unknown"
+    override = (series_name or "").strip()
+    title = strip_series_prefix(raw_name, override) if override else raw_name
+    cleaned = clean_series_title(title, folder_series)
+    series_name = override or strip_regional_edition_suffix(folder_series)
 
     # 1) 期刊 T/D 特刊优先
     if is_periodical:
@@ -192,7 +204,7 @@ def build_output_cbz_name(
     # 2) 普通特刊/番外/特典/画集
     special_kw = extract_special_label(cleaned)
     if special_kw:
-        vol = extract_special_volume(cleaned)
+        vol = extract_volume_number(cleaned)
 
         if vol is not None:
             return f"{series_name} - {special_kw} 第{format_volume_number(vol)}册.cbz"
@@ -200,12 +212,7 @@ def build_output_cbz_name(
         return f"{series_name} - {cleaned}.cbz"
 
     # 3) 普通卷 / 期
-    vol = None
-    for p in VOL_PATTERN_LIST:  # 从 consts.py 统一抽正则
-        m = re.search(p, cleaned, re.IGNORECASE)
-        if m:
-            vol = normalize_volume_number(m.group(1))
-            break
+    vol = extract_volume_number(cleaned)
     if vol is not None:
         unit = "期" if is_periodical else "卷"
         return f"{series_name} - 第{format_volume_number(vol)}{unit}.cbz"

@@ -350,13 +350,11 @@ def extract_categories(wikitext: str) -> list[str]:
 
 
 def parse_header(fields: dict[str, str]) -> WikiAnimangaHeader:
-    genre = split_clean_list(fields.get("genre"))
-
     return WikiAnimangaHeader(
-        title=clean_wiki_text(fields.get("title")),
-        original_title=clean_wiki_text(fields.get("japanese")),
-        english_title=clean_wiki_text(fields.get("english")),
-        genre=genre,
+        title=_first_clean_field(fields, ("title", "標題", "标题")),
+        original_title=_first_clean_field(fields, ("japanese", "日文名稱", "日文名称")),
+        english_title=_first_clean_field(fields, ("english", "英文名稱", "英文名称")),
+        genre=split_clean_list(fields.get("genre") or fields.get("類型") or fields.get("类型")),
         raw_fields=dict(fields),
     )
 
@@ -374,6 +372,15 @@ def parse_manga_block(
         "<br>".join(value for value in publisher_values if value)
     )
     header_genre = header.genre if header else []
+    count = fields.get("冊數") or fields.get("册数") or fields.get("冊数")
+    preferred_region = next((region for region in ("taiwan", "hongkong") if publishers[region]), None)
+    regional_count = None
+    if count and preferred_region:
+        for part in re.split(r"<br\s*/?>", count, flags=re.I):
+            if _publisher_country(part) == preferred_region:
+                regional_count = parse_count(part)
+                if regional_count is not None:
+                    break
 
     return WikiMangaInfo(
         title=clean_wiki_text(fields.get("標題") or fields.get("title")),
@@ -389,7 +396,7 @@ def parse_manga_block(
         label=clean_wiki_text(fields.get("label")),
         start=_first_clean_field(fields, START_DATE_FIELDS),
         end=_first_clean_field(fields, END_DATE_FIELDS),
-        volume_count=parse_count(fields.get("冊數")),
+        volume_count=regional_count if regional_count is not None else parse_count(count),
         chapter_count=parse_count(fields.get("話數")),
         genre=list(header_genre),
         raw_fields=dict(fields),

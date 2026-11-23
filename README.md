@@ -7,10 +7,10 @@
 ## 功能
 
 - 自动扫描当前目录下的 `.epub` 文件
-- HTML解析抽取漫画页
-- 图片过滤：去除广告页、尾页和高留白垃圾图
+- 读取 EPUB 的 OPF 和 spine，按阅读顺序提取图片，保留正文白页和重复引用
+- 跳过文件名明确标识的广告文档。遇到缺图、坏图或零页时，该卷报错并保留已有 CBZ
 - EPUB 保留整张图片，不做上下拆页；仅依据原 EPUB 的 `rotate:1` 标签将横置图片转正
-- 自动命名 CBZ 文件，保留中文漫画名 + 卷/期/特典
+- 自动命名 CBZ 文件，使用同一套卷期解析填写 ComicInfo 卷号
 - 支持期刊特刊、合刊、番外、月刊等多种格式
 - 生成 CBZ 后自动保存在 EPUB 同目录
 - 独立的 PDF 入口自动扫描当前系列目录下的 `.pdf` 文件
@@ -58,8 +58,10 @@ beautifulsoup4
 使用 PyInstaller 打包 EPUB 入口：
 
 ```bash
-pyinstaller --onefile --name epub2cbz main.py
+pyinstaller --onefile --exclude-module cv2 --name epub2cbz main.py
 ```
+
+EPUB 入口只按标签旋转图片，打包时可以省略 OpenCV。构建产物对应当前系统和架构。
 
 Windows PowerShell 也可以直接运行项目内的固定打包脚本：
 
@@ -109,6 +111,13 @@ Wiki 条目时，可用 `--wiki-url` 显式指定整批 EPUB 共用的元数据�
 
 ```bash
 epub2cbz.exe --wiki-url "https://zh.wikipedia.org/wiki/JoJolion"
+```
+
+如果已有书库使用不同的系列名，可以用 `--series-title` 让新 CBZ 的文件名前缀和
+`ComicInfo.xml` 系列名沿用旧名称。指定一个 EPUB 文件时只转换这一卷。
+
+```bash
+epub2cbz.exe --series-title "SAKAMOTODAYS坂本" "[Kmoe][SAKAMOTODAYS坂本]卷18.epub"
 ```
 
 成功获取的系列资料会缓存为当前目录的 `series.meta.json`，并写入每个新生成 CBZ 根目录下的

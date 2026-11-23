@@ -1,6 +1,7 @@
 import unittest
 
 from metadata.wiki_models import WikiMangaInfo, WikiSeriesMetadata
+from metadata.wiki_scraper import build_series_metadata_from_wikitext
 from metadata.wiki_to_comicinfo import wiki_series_to_comicinfo
 
 
@@ -37,7 +38,6 @@ class WikiTagFilteringTests(unittest.TestCase):
         useful_categories = [
             "2016年日本漫畫作品",
             "2020年完結漫畫",
-            "Crunchyroll動畫獎得主",
             "手塚治虫文化獎獲獎作品",
             "週刊少年Jump連載作品",
             "日本漫畫作品",
@@ -109,6 +109,43 @@ class WikiTagFilteringTests(unittest.TestCase):
                 "Historical",
             ],
         )
+
+    def test_adaptation_categories_do_not_supply_manga_tags_or_genres(self):
+        wiki = self._wiki(categories=[
+            "歷史動畫",
+            "漫畫改編電視劇",
+            "Crunchyroll動畫獎得主",
+            "Anime based on Japanese manga",
+            "電子遊戲題材漫畫",
+            "Manga based on anime",
+            "冒險漫畫",
+        ])
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.genre, ["Fantasy", "Adventure"])
+        self.assertEqual(
+            comic_info.tags,
+            ["奇幻", "週刊少年Jump", "電子遊戲題材漫畫", "Manga based on anime", "冒險漫畫"],
+        )
+
+    def test_shared_article_categories_are_not_applied_to_a_sequel(self):
+        wiki = build_series_metadata_from_wikitext(
+            """
+{{Infobox animanga/Manga|標題=原作|冊數=全3卷}}
+{{Infobox animanga/Manga|標題=續作|冊數=全2卷|連載雜誌=週刊少年Jump}}
+""",
+            page_title="原作",
+            pageid=1,
+            query="續作",
+            categories=["歷史漫畫", "原作漫畫"],
+        )
+
+        comic_info = wiki_series_to_comicinfo(wiki, 1)
+
+        self.assertEqual(comic_info.series, "續作")
+        self.assertEqual(comic_info.genre, [])
+        self.assertEqual(comic_info.tags, ["週刊少年Jump"])
 
     def test_publisher_region_prefix_is_removed(self):
         wiki = self._wiki(categories=[])

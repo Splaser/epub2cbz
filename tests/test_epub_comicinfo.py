@@ -12,6 +12,7 @@ from metadata.epub_comicinfo import (
 )
 from metadata.wiki_models import WikiMangaInfo, WikiPageData, WikiSearchItem, WikiSeriesMetadata
 from metadata.wiki_scraper import build_series_metadata_from_wikitext
+from utils.metadata_utils import build_output_cbz_name
 
 
 class _FakeWikiClient:
@@ -230,7 +231,7 @@ class MetadataCacheVersionTests(unittest.TestCase):
             cache_path = Path(temp_dir) / "series.meta.json"
             cache_path.write_text(
                 json.dumps({
-                    "schema_version": 6,
+                    "schema_version": 8,
                     "series_name": "膽大黨",
                     "metadata": {},
                 }),
@@ -246,6 +247,87 @@ class MetadataCacheVersionTests(unittest.TestCase):
 
 
 class InteractiveWikiSelectionTests(unittest.TestCase):
+    def test_original_manga_name_matches_direct_article_with_spinoff(self):
+        page = WikiPageData(
+            requested_title="Example Days",
+            title="Example Days 中文名",
+            pageid=1,
+            wikitext="""
+{{Infobox animanga/Headerofja|日文名稱=Example Days|類型=[[格鬥]]、[[喜劇]]}}
+{{Infobox animanga/Manga|作者=Writer|出版社={{flagicon|TWN}}東立出版社
+|冊數={{flagicon|JPN}} 29冊（2026年11月）<br/>{{flagicon|TWN}} 26冊（2026年9月）}}
+{{Infobox animanga/Manga|標題=Example Side Story|作者=Artist|冊數=4冊}}
+""",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = load_exact_wiki_series_for_dir(
+                Path(temp_dir) / "Example Days",
+                client=_FakeWikiClient(page),
+                use_cache=False,
+                candidate_selector=lambda *_: self.fail("Unexpected Wiki candidate prompt"),
+            )
+
+        self.assertEqual(result.main_manga.author, ["Writer"])
+        self.assertEqual(result.main_manga.volume_count, 26)
+        self.assertEqual(result.main_manga.genre, ["格鬥", "喜劇"])
+
+    def test_exact_search_result_is_used_before_prompting_for_multiple_candidates(self):
+        pages = [
+            WikiPageData(
+                requested_title="Other",
+                title="Other",
+                pageid=1,
+                wikitext="{{Infobox animanga/Manga|標題=Other|冊數=全5卷}}",
+            ),
+            WikiPageData(
+                requested_title="Example (漫畫)",
+                title="Example (漫畫)",
+                pageid=2,
+                wikitext="{{Infobox animanga/Manga|標題=Example|冊數=全3卷}}",
+            ),
+        ]
+        client = _CandidateWikiClient(pages)
+
+        def unexpected_prompt(query, candidates):
+            self.fail(f"Prompted for {query} despite an exact manga: {candidates}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = load_exact_wiki_series_for_dir(
+                Path(temp_dir) / "Example",
+                client=client,
+                use_cache=False,
+                candidate_selector=unexpected_prompt,
+            )
+
+        self.assertEqual(result.page_title, "Example (漫畫)")
+        self.assertEqual(result.main_manga.volume_count, 3)
+
+    def test_distinct_exact_search_results_still_require_a_choice(self):
+        pages = [
+            WikiPageData(
+                requested_title=title,
+                title=title,
+                pageid=index,
+                wikitext="{{Infobox animanga/Manga|標題=Example}}",
+            )
+            for index, title in enumerate(("Example (漫畫甲)", "Example (漫畫乙)"), start=1)
+        ]
+
+        def choose(_query, candidates):
+            self.assertEqual([item.title for item in candidates], [page.title for page in pages])
+            return candidates[1].title
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = load_exact_wiki_series_for_dir(
+                Path(temp_dir) / "Example",
+                client=_CandidateWikiClient(pages),
+                use_cache=False,
+                candidate_selector=choose,
+            )
+
+        self.assertEqual(result.pageid, 2)
+
     def test_selected_search_result_bypasses_automatic_title_guessing(self):
         manga_page = WikiPageData(
             requested_title="三國志 (橫山光輝漫畫)",
@@ -339,6 +421,26 @@ class InteractiveWikiSelectionTests(unittest.TestCase):
 
 
 class SpecialComicInfoTests(unittest.TestCase):
+    def test_comicinfo_number_agrees_with_output_name(self):
+        for title, number, padded in (
+            ("Example Vol.9 第02期", "2", "002"),
+            ("10.5", "10.5", "010.5"),
+            ("第０卷", "0", "000"),
+        ):
+            with self.subTest(title=title):
+                epub_path = f"E:/Books/測試系列/{title}.epub"
+                output_name = build_output_cbz_name(epub_path)
+                self.assertEqual(output_name, f"測試系列 - 第{padded}卷.cbz")
+
+                xml = build_comicinfo_xml_for_epub(
+                    epub_path=epub_path,
+                    output_cbz_name=output_name,
+                    page_count=1,
+                    wiki_series=self._wiki(),
+                )
+
+                self.assertEqual(ComicInfo.from_xml_bytes(xml).number, number)
+
     def test_unnumbered_bonus_books_are_written_as_specials(self):
         for title in ("官方角色設定集", "秘笈", "畫冊", "20周年紀念短篇"):
             with self.subTest(title=title):

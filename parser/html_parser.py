@@ -1,11 +1,14 @@
 # parser/html_parser.py
 import os
-import posixpath
+import re
 from html.parser import HTMLParser
-from urllib.parse import unquote
-from typing import List
+from pathlib import Path
 from bs4 import BeautifulSoup
 from utils.consts import IMG_EXT
+from utils.epub_utils import resolve_fs_path
+
+
+_ROTATE_TAG = re.compile(r"\brotate\s*:\s*(\d+)\b", re.I)
 
 
 class ComicParser(HTMLParser):
@@ -53,55 +56,45 @@ class ComicParser(HTMLParser):
         if not src or src.startswith("data:"):  # 排除 base64 内嵌图
             return
 
-        cls = attr.get("class", "")
-        if cls in ["singlePage", "twoPage", "imgl", "tl", "imgr", "tr", "bl", "br"]:
-            self.images.append(src)
-        else:
-            self.images.append(src)  # 没 class 也收，避免漏页
-
-
-def normalize_href(path_str: str) -> str:
-    """Normalize URL/HTML href to filesystem-friendly relative path"""
-    path_str = unquote(path_str)
-    path_str = path_str.replace("\\", "/")
-    path_str = path_str.split("#", 1)[0]
-    return posixpath.normpath(path_str)
-
-
-def resolve_fs_path(base_dir: str, rel_path: str) -> str:
-    """Convert href relative to HTML base_dir into local filesystem path"""
-    rel_path = normalize_href(rel_path)
-    return os.path.normpath(os.path.join(base_dir, *rel_path.split("/")))
+        rotate = _ROTATE_TAG.search(attr.get("kmoetag") or "")
+        self.images.append((src, rotate is not None and rotate.group(1).lstrip("0") == "1"))
 
 
 def is_image_file(path: str) -> bool:
     return path.lower().endswith(IMG_EXT)
 
 
-def extract_image_paths_from_html(html_path: str) -> List[str]:
-    """
-    从单个 HTML 文件抽取漫画图片路径
-    返回本地存在的图片文件列表
-    """
-    try:
-        with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception:
-        return []
-
+def extract_image_references(html_path: str, epub_root: str) -> list[tuple[str, bool]]:
+    """Read local image references and orientation in document order."""
     parser = ComicParser()
-    parser.feed(content)
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as source:
+        parser.feed(source.read())
+    parser.close()
 
     base_dir = os.path.dirname(html_path)
     results = []
-    for src in parser.images:
-        img_path = resolve_fs_path(base_dir, src)
-        if os.path.exists(img_path) and is_image_file(img_path):
-            results.append(img_path)
+    for src, rotate in parser.images:
+        img_path = resolve_fs_path(base_dir, src, epub_root)
+        if img_path is None or not is_image_file(img_path):
+            continue
+        if not os.path.isfile(img_path):
+            raise FileNotFoundError(f"Missing EPUB image {src!r} in {html_path}")
+        results.append((img_path, rotate))
 
     return results
 
 
+def extract_image_paths_from_html(html_path: str) -> list[str]:
+    path = Path(html_path).resolve()
+    root = next(
+        (parent for parent in path.parents
+         if (parent / "META-INF").is_dir() or (parent / "vol.opf").is_file()),
+        path.parent,
+    )
+    try:
+        return [image for image, _ in extract_image_references(str(path), str(root))]
+    except OSError:
+        return []
 
 
 def extract_images_from_html(html_path: str) -> list[str]:

@@ -9,9 +9,11 @@ from typing import Callable, Optional
 
 from utils.metadata_utils import (
     clean_raw_name,
+    clean_series_title,
     extract_special_label,
-    normalize_volume_number,
+    extract_volume_number,
     strip_regional_edition_suffix,
+    strip_series_prefix,
 )
 
 from .wiki_client import WikiClient
@@ -22,7 +24,7 @@ from .wiki_wikitext import _match_key, parse_wikitext
 
 
 SERIES_METADATA_CACHE_NAME = "series.meta.json"
-SERIES_METADATA_CACHE_VERSION = 7
+SERIES_METADATA_CACHE_VERSION = 9
 
 
 # Local/publisher titles that resolve to an unrelated zh.wikipedia concept page.
@@ -101,7 +103,8 @@ def _find_wiki_page_with_manga(
     candidate_selector: Optional[WikiCandidateSelector] = None,
 ) -> Optional[WikiPageData]:
     """Prefer an exact manga block, even when several works share one Wiki page."""
-    seen_titles = set()
+    pages_by_title = {}
+    exact_results = []
     best_page = None
     best_strength = 0
     try:
@@ -115,7 +118,7 @@ def _find_wiki_page_with_manga(
         if strength:
             best_page = direct_page
             best_strength = strength
-        seen_titles.add(_title_key(direct_page.title))
+        pages_by_title[_title_key(direct_page.title)] = direct_page
 
     results = _search_wiki_candidates(
         client,
@@ -123,13 +126,60 @@ def _find_wiki_page_with_manga(
         include_manga_search=candidate_selector is not None,
     )
 
-    if candidate_selector is not None and len(results) > 1:
-        selected_title = candidate_selector(query, results)
+    for result in results:
+        title_key = _title_key(result.title)
+        if title_key in pages_by_title:
+            continue
+        try:
+            page = client.page_data(result.title)
+        except Exception:
+            continue
+        canonical_key = _title_key(page.title)
+        already_loaded = canonical_key in pages_by_title
+        pages_by_title[title_key] = page
+        pages_by_title[canonical_key] = page
+        if already_loaded:
+            continue
+
+        strength = _page_manga_match_strength(page, query)
+        if strength == 3:
+            if candidate_selector is None:
+                print(f"  - Wiki ComicInfo search match: '{query}' -> '{page.title}'")
+                return page
+            exact_results.append(result)
+            continue
+        if strength > best_strength:
+            best_page = page
+            best_strength = strength
+
+    if len(exact_results) == 1:
+        page = pages_by_title[_title_key(exact_results[0].title)]
+        print(f"  - Wiki ComicInfo search match: '{query}' -> '{page.title}'")
+        return page
+
+    if not exact_results:
+        # A sequel can exist only as a manga block inside a parent article.
+        for title in _parent_page_title_candidates(query):
+            if _title_key(title) in pages_by_title:
+                continue
+            try:
+                page = client.page_data(title)
+            except Exception:
+                continue
+            if _page_manga_match_strength(page, query) == 3:
+                print(f"  - Wiki ComicInfo parent-page match: '{query}' -> '{page.title}'")
+                return page
+
+    candidates = exact_results or results
+    if candidate_selector is not None and len(candidates) > 1:
+        selected_title = candidate_selector(query, candidates)
         if not selected_title:
             print(f"  - skip Wiki ComicInfo: no candidate selected for '{query}'")
             return None
         try:
-            selected_page = client.page_data(selected_title)
+            selected_page = pages_by_title.get(_title_key(selected_title))
+            if selected_page is None:
+                selected_page = client.page_data(selected_title)
         except Exception as exc:
             print(
                 "  - skip Wiki ComicInfo selected page: "
@@ -138,39 +188,6 @@ def _find_wiki_page_with_manga(
             return None
         print(f"  - Wiki ComicInfo selected: '{query}' -> '{selected_page.title}'")
         return selected_page
-
-    for result in results:
-        title_key = _title_key(result.title)
-        if title_key in seen_titles:
-            continue
-        try:
-            page = client.page_data(result.title)
-        except Exception:
-            continue
-        seen_titles.add(title_key)
-
-        strength = _page_manga_match_strength(page, query)
-        if strength == 3:
-            print(f"  - Wiki ComicInfo search match: '{query}' -> '{page.title}'")
-            return page
-        if strength > best_strength:
-            best_page = page
-            best_strength = strength
-
-    # Search can miss a sequel whose title exists only as a manga block inside
-    # the parent article. Try short title roots, but accept only an exact block.
-    for title in _parent_page_title_candidates(query):
-        title_key = _title_key(title)
-        if title_key in seen_titles:
-            continue
-        seen_titles.add(title_key)
-        try:
-            page = client.page_data(title)
-        except Exception:
-            continue
-        if _page_manga_match_strength(page, query) == 3:
-            print(f"  - Wiki ComicInfo parent-page match: '{query}' -> '{page.title}'")
-            return page
 
     if best_page is not None:
         print(f"  - Wiki ComicInfo search fallback: '{query}' -> '{best_page.title}'")
@@ -240,10 +257,13 @@ def _page_manga_match_strength(page: WikiPageData, query: str) -> int:
         return 0
 
     if parsed.main_manga is not None:
-        title = parsed.main_manga.title
-        if not title and parsed.manga_blocks[0] is parsed.main_manga:
-            title = page.title
-        if title and _match_key(title) == _match_key(query):
+        manga = parsed.main_manga
+        title = manga.title
+        aliases = [title]
+        if parsed.manga_blocks[0] is manga:
+            aliases.extend((title or page.title, manga.original_title, manga.english_title))
+        query_key = _match_key(query)
+        if any(alias and _match_key(alias) == query_key for alias in aliases):
             return 3
         if len(parsed.manga_blocks) == 1 and _titles_related(query, title):
             return 2
@@ -409,18 +429,20 @@ def build_comicinfo_xml_for_epub(
     output_cbz_name: str,
     page_count: int,
     wiki_series: Optional[WikiSeriesMetadata] = None,
+    series_title: Optional[str] = None,
 ) -> Optional[bytes]:
     if wiki_series is None:
         return None
 
     epub = Path(epub_path)
-    series_name = epub.parent.name
-    cleaned_title = clean_raw_name(epub.stem)
-    series_prefix = f"{series_name} - "
-    if cleaned_title.casefold().startswith(series_prefix.casefold()):
-        cleaned_title = cleaned_title[len(series_prefix):].strip()
+    folder_name = epub.parent.name
+    series_name = series_title or folder_name
+    cleaned_title = clean_series_title(strip_series_prefix(epub.stem, series_name), folder_name)
     is_special = extract_special_label(cleaned_title) is not None
-    volume_number = infer_volume_number(epub.name) or infer_volume_number(output_cbz_name)
+    output_title = strip_series_prefix(Path(output_cbz_name).stem, series_name)
+    volume_number = extract_volume_number(output_title)
+    if volume_number is None:
+        volume_number = extract_volume_number(cleaned_title)
 
     if volume_number is None and not is_special:
         print(f"  - skip ComicInfo: cannot infer volume number from {epub.name}")
@@ -446,29 +468,9 @@ def build_comicinfo_xml_for_epub(
 
 
 def infer_volume_number(filename: str) -> Optional[int | str]:
-    import re
-
-    normalized = filename.translate(str.maketrans("０１２３４５６７８９．", "0123456789."))
-
-    patterns = (
-        r"第\s*0*(\d+(?:\.\d+)?)\s*[卷冊册]",
-        r"[卷期]\s*0*(\d+(?:\.\d+)?)",
-        r"vol(?:ume)?\.?\s*0*(\d+(?:\.\d+)?)",
-        r"[_\-\s]0*(\d{1,3}(?:\.\d+)?)(?=\D*$)",
-    )
-
-    for pattern in patterns:
-        match = re.search(pattern, normalized, flags=re.I)
-        if match:
-            # A number describing an anniversary is not a volume number.  This
-            # matters for both source names and renamed output such as
-            # "Series - 20周年紀念短篇.cbz".
-            following_text = normalized[match.end():]
-            if re.match(r"\s*(?:週年|周年)", following_text):
-                continue
-            return normalize_volume_number(match.group(1))
-
-    return None
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    title = clean_raw_name(re.sub(r"\.(?:epub|cbz)$", "", name, flags=re.I))
+    return extract_volume_number(title)
 
 
 def count_epubs_in_dir(path: Path) -> Optional[int]:

@@ -2,105 +2,89 @@ import argparse
 import html
 import os
 import re
+import sys
 import tempfile
-import shutil
 from typing import Callable, Optional
-from images.filter import get_garbage_image_reason, filter_html_files, is_image_file
 from builder.cbz_builder import make_cbz
+from images.splitter import prepare_epub_page
 from metadata.epub_comicinfo import (
     build_comicinfo_xml_for_epub,
     load_exact_wiki_series_for_dir,
     load_wiki_series_for_url,
 )
 from metadata.wiki_models import WikiSearchItem
+from parser.html_parser import extract_image_references, is_image_file
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
 from utils.metadata_utils import build_output_cbz_name
-from images.splitter import infer_common_page_size, split_wide_image_if_needed
 
 
-def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None):
-    output_name = build_output_cbz_name(epub_path)
+_EPUB_AD_DOCUMENTS = {"createby", "createinfo", "endinfo", "theendinfo", "ad", "ads", "adv", "advertisement"}
+
+
+def collect_epub_pages(epub_root: str) -> list[tuple[str, bool]]:
+    spine_files, spine = get_html_files_by_spine(epub_root)
+    if not spine:
+        return [(path, False) for path in fallback_all_images(epub_root)]
+
+    pages = []
+    for path, item in zip(spine_files, spine):
+        stem, ext = os.path.splitext(os.path.basename(path).lower())
+        if is_image_file(path):
+            pages.append((path, False))
+        elif ext in {".html", ".htm", ".xhtml", ".svg"} or item["media_type"] in {
+            "application/xhtml+xml", "text/html", "image/svg+xml",
+        }:
+            if stem not in _EPUB_AD_DOCUMENTS:
+                pages.extend(extract_image_references(path, epub_root))
+        else:
+            raise ValueError(f"Unsupported EPUB spine document: {item['href']}")
+    return pages
+
+
+def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None, *, series_title=None):
+    epub_path = os.path.abspath(epub_path)
+    if series_title is not None:
+        series_title = series_title.strip()
+        if not series_title or re.search(r'[<>:"/\\|?*\x00-\x1f]', series_title):
+            raise ValueError("Series title must be a valid filename prefix")
+    output_name = build_output_cbz_name(epub_path, series_name=series_title)
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
-    temp_dir = tempfile.mkdtemp(prefix="epub2cbz_")
-
-    try:
-        # 解压 EPUB
-        extract_epub(epub_path, temp_dir)
-
-        # 严格 spine 顺序获取 HTML
-        html_files, _ = get_html_files_by_spine(temp_dir)
-
-        # 使用 filter_html_files 直接过滤 HTML 对应的图片
-        filtered_images = filter_html_files(html_files)
-
-        valid_images = []
-        for spine_idx, img_path in enumerate(filtered_images):
-            # 只处理合法图片
-            if not is_image_file(img_path):
-                continue
-
-            # 检测垃圾页
-            reason = get_garbage_image_reason(img_path)
-            if reason:
-                try:
-                    size_kb = os.path.getsize(img_path) // 1024
-                except Exception:
-                    size_kb = -1
-                print(f"  - skip [garbage-image:{reason}] {os.path.basename(img_path)} ({size_kb}KB)")
-                continue
-
-            valid_images.append((spine_idx, img_path))
-
-        common_page_size = infer_common_page_size([img_path for _, img_path in valid_images])
-
-        images_with_index = []
-        split_counter = 0
-        for spine_idx, img_path in valid_images:
-            # 拆页处理
-            split_imgs = split_wide_image_if_needed(
-                img_path,
-                temp_dir,
-                enable_split=True,
-                common_page_size=common_page_size,
-            )
-            for s_img in split_imgs:
-                images_with_index.append((spine_idx, split_counter, s_img))
-                split_counter += 1
-
-        # fallback 仅补缺页
-        if not images_with_index:
-            fallback_imgs = fallback_all_images(temp_dir)
-            fallback_imgs = [img for img in fallback_imgs if not get_garbage_image_reason(img)]
-            for f_idx, f_img in enumerate(fallback_imgs):
-                images_with_index.append((9999, f_idx, f_img))
-        # 排序
-        images_with_index.sort(key=lambda x: (x[0], x[1]))
-        final_images = [img for _, _, img in images_with_index]
+    with tempfile.TemporaryDirectory(prefix="epub2cbz_") as temp_dir:
+        epub_root = os.path.join(temp_dir, "epub")
+        rotated_dir = os.path.join(temp_dir, "rotated")
+        os.mkdir(epub_root)
+        os.mkdir(rotated_dir)
+        extract_epub(epub_path, epub_root)
+        pages = collect_epub_pages(epub_root)
+        if not pages:
+            raise ValueError(f"EPUB has no image pages: {epub_path}")
+        final_images = [
+            prepare_epub_page(path, rotated_dir, rotate=rotate)
+            for path, rotate in pages
+        ]
 
         comicinfo_xml = build_comicinfo_xml_for_epub(
             epub_path=epub_path,
             output_cbz_name=output_name,
             page_count=len(final_images),
             wiki_series=wiki_series_metadata,
+            series_title=series_title,
         )
 
-        # 打包 CBZ
         make_cbz(final_images, output_cbz, comicinfo_xml=comicinfo_xml)
         print(f"✅ CBZ created: {output_cbz}, total pages: {len(final_images)}")
 
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
 
 def get_base_dir():
-    import sys, os
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Convert EPUB files in the current series directory to CBZ.")
+    parser = argparse.ArgumentParser(description="Convert one EPUB or scan the executable's directory for EPUBs.")
+    parser.add_argument("epub", nargs="?", help="Convert only this EPUB file.")
+    parser.add_argument("--series-title", help="Use this series name for the CBZ filename and ComicInfo.")
     parser.add_argument(
         "--wiki-url",
         help="Explicit zh.wikipedia page URL to use as metadata source when the directory name is not the Wiki title.",
@@ -156,11 +140,16 @@ def load_wiki_metadata_for_main(base_dir, wiki_url=None):
 
 if __name__ == "__main__":
     args = parse_args()
-    base_dir = get_base_dir()
-    os.chdir(base_dir)
-
-    epub_files = [f for f in os.listdir(base_dir) if f.lower().endswith(".epub")]
-    epub_files.sort()
+    if args.epub:
+        epub_path = os.path.abspath(args.epub)
+        if not epub_path.lower().endswith(".epub") or not os.path.isfile(epub_path):
+            print(f"❌ EPUB file not found: {epub_path}", file=sys.stderr)
+            sys.exit(1)
+        base_dir, epub_name = os.path.split(epub_path)
+        epub_files = [epub_name]
+    else:
+        base_dir = get_base_dir()
+        epub_files = sorted(f for f in os.listdir(base_dir) if f.lower().endswith(".epub"))
 
     if not epub_files:
         print(f"❌ No epub files found in: {base_dir}")
@@ -169,5 +158,16 @@ if __name__ == "__main__":
     if epub_files:
         wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
 
+    failures = False
     for epub in epub_files:
-        epub_to_cbz_fixed(os.path.join(base_dir, epub), wiki_series_metadata=wiki_series_metadata)
+        try:
+            epub_to_cbz_fixed(
+                os.path.join(base_dir, epub),
+                wiki_series_metadata=wiki_series_metadata,
+                series_title=args.series_title,
+            )
+        except Exception as exc:
+            failures = True
+            print(f"❌ EPUB conversion failed: {epub} ({exc})", file=sys.stderr)
+    if failures:
+        sys.exit(1)

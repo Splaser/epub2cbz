@@ -27,6 +27,15 @@ _NON_CONTENT_CATEGORY_PATTERNS = (
     re.compile(r"(?:維基|维基|Wikidata|维基数据|維基數據)", re.I),
     re.compile(r"(?:用戶名|用户名)", re.I),
 )
+_OTHER_MEDIA_CATEGORY = re.compile(
+    r"動畫|动画|電影|电影|電視劇|电视剧|電視節目|电视节目|輕小說|轻小说|電子遊戲|电子游戏|"
+    r"\b(?:anime|animated|animation|television|films?|light novels?|video games?)\b",
+    re.I,
+)
+_COMIC_CATEGORY_SUBJECT = re.compile(
+    r"(?:漫畫(?:作品|系列)?|漫画(?:作品|系列)?|\bmanga|\bcomics?)$",
+    re.I,
+)
 
 
 # Kavita genres are free-form, but keeping a small stable vocabulary makes its
@@ -186,7 +195,12 @@ def _is_content_category(value: str) -> bool:
     if not text:
         return False
 
-    return not any(pattern.search(text) for pattern in _NON_CONTENT_CATEGORY_PATTERNS)
+    if any(pattern.search(text) for pattern in _NON_CONTENT_CATEGORY_PATTERNS):
+        return False
+    if not _OTHER_MEDIA_CATEGORY.search(text):
+        return True
+    subject = re.split(r"\b(?:based on|adapted from)\b", text, maxsplit=1, flags=re.I)[0]
+    return bool(_COMIC_CATEGORY_SUBJECT.search(subject.rstrip()))
 
 
 def _build_notes(wiki: WikiSeriesMetadata) -> Optional[str]:

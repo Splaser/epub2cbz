@@ -1,0 +1,179 @@
+import io
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+
+from PIL import Image
+
+from builder.cbz_builder import make_cbz
+from main import epub_to_cbz_fixed
+from metadata.comicinfo import ComicInfo
+from metadata.wiki_models import WikiMangaInfo, WikiSeriesMetadata
+
+
+class EpubConversionTests(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.series_dir = Path(temp_dir.name) / "Example"
+        self.series_dir.mkdir()
+        self.epub = self.series_dir / "vol1.epub"
+        self.cbz = self.series_dir / "Example - 第001卷.cbz"
+
+    @staticmethod
+    def png(color):
+        with io.BytesIO() as output:
+            Image.new("RGB", (12, 8), color).save(output, format="PNG")
+            return output.getvalue()
+
+    def write_epub(self, spine, files, *, opf="OEBPS/content.opf"):
+        package = ET.Element("package")
+        manifest = ET.SubElement(package, "manifest")
+        reading_order = ET.SubElement(package, "spine")
+        for index, href in enumerate(spine):
+            item_id = f"p{index}"
+            ET.SubElement(manifest, "item", {"id": item_id, "href": href})
+            ET.SubElement(reading_order, "itemref", {"idref": item_id})
+        with zipfile.ZipFile(self.epub, "w") as archive:
+            if opf != "vol.opf":
+                archive.writestr(
+                    "META-INF/container.xml",
+                    f'<container><rootfiles><rootfile full-path="{opf}"/></rootfiles></container>',
+                )
+            archive.writestr(opf, ET.tostring(package))
+            for name, content in files.items():
+                archive.writestr(str(Path(opf).parent.joinpath(name).as_posix()), content)
+
+    def test_nested_opf_preserves_spine_order_white_pages_and_rotation_per_reference(self):
+        red, blue, white = (self.png(color) for color in ("red", "blue", "white"))
+        self.write_epub(
+            ["html/z.xhtml", "html/a.xhtml", "images/white.png", "html/repeat.xhtml"],
+            {
+                "html/z.xhtml": '<img src="../images/a/page.png" kmoetag="rotate:1"/>',
+                "html/a.xhtml": '<img src="../images/b/page.png" kmoetag="rotate:1"/>',
+                "html/repeat.xhtml": '<img src="../images/a/page.png" kmoetag="rotate:0"/>',
+                "images/a/page.png": red,
+                "images/b/page.png": blue,
+                "images/white.png": white,
+                "images/unused.png": self.png("green"),
+            },
+        )
+        wiki = WikiSeriesMetadata(
+            page_title="Example", pageid=1, page_url=None, wikibase_item=None,
+            summary=None, main_manga=WikiMangaInfo(title="Example", volume_count=1),
+        )
+
+        epub_to_cbz_fixed(self.epub, wiki)
+
+        with zipfile.ZipFile(self.cbz) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(
+                archive.namelist(),
+                ["0001.png", "0002.png", "0003.png", "0004.png", "ComicInfo.xml"],
+            )
+            for name, color in (("0001.png", (255, 0, 0)), ("0002.png", (0, 0, 255))):
+                with Image.open(io.BytesIO(archive.read(name))) as page:
+                    self.assertEqual(page.size, (8, 12))
+                    self.assertEqual(page.getpixel((0, 0)), color)
+            self.assertEqual(archive.read("0003.png"), white)
+            self.assertEqual(archive.read("0004.png"), red)
+            self.assertEqual(archive.getinfo("0004.png").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.getinfo("ComicInfo.xml").compress_type, zipfile.ZIP_DEFLATED)
+            info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
+            self.assertEqual(info.page_count, 4)
+
+    def test_container_takes_precedence_over_legacy_opf(self):
+        self.write_epub(["page.png"], {"page.png": self.png("red")})
+        with zipfile.ZipFile(self.epub, "a") as archive:
+            archive.writestr("vol.opf", "invalid XML")
+
+        epub_to_cbz_fixed(self.epub)
+
+        with zipfile.ZipFile(self.cbz) as archive:
+            self.assertEqual(archive.namelist(), ["0001.png"])
+
+    def test_series_title_override_matches_output_name_and_comicinfo(self):
+        self.write_epub(["page.png"], {"page.png": self.png("red")})
+        wiki = WikiSeriesMetadata(
+            page_title="Example Wiki", pageid=1, page_url=None, wikibase_item=None,
+            summary=None, main_manga=WikiMangaInfo(title="Example Wiki", volume_count=1),
+        )
+
+        epub_to_cbz_fixed(self.epub, wiki, series_title="舊版系列")
+
+        with zipfile.ZipFile(self.series_dir / "舊版系列 - 第001卷.cbz") as archive:
+            info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
+        self.assertEqual((info.series, info.series_sort, info.localized_series), ("舊版系列",) * 3)
+        self.assertEqual(info.number, "1")
+        self.assertFalse(self.cbz.exists())
+
+    def test_legacy_opf_keeps_white_page_and_skips_explicit_ad_document(self):
+        white = self.png("white")
+        self.write_epub(
+            ["page.xhtml", "ad.xhtml"],
+            {
+                "page.xhtml": '<img src="white.png"/>',
+                "ad.xhtml": '<img src="ad.png"/>',
+                "white.png": white,
+                "ad.png": self.png("red"),
+            },
+            opf="vol.opf",
+        )
+
+        epub_to_cbz_fixed(self.epub)
+
+        with zipfile.ZipFile(self.cbz) as archive:
+            self.assertEqual(archive.namelist(), ["0001.png"])
+            self.assertEqual(archive.read("0001.png"), white)
+
+    def test_zero_pages_never_create_or_replace_an_archive(self):
+        self.write_epub(["page.xhtml"], {"page.xhtml": "<p>No image pages</p>"})
+        with self.assertRaisesRegex(ValueError, "EPUB has no image pages"):
+            epub_to_cbz_fixed(self.epub)
+        self.assertFalse(self.cbz.exists())
+
+        self.cbz.write_bytes(b"existing output")
+        with self.assertRaisesRegex(ValueError, "without image pages"):
+            make_cbz(iter(()), self.cbz, comicinfo_xml=b"<ComicInfo/>")
+        self.assertEqual(self.cbz.read_bytes(), b"existing output")
+
+    def test_missing_or_corrupt_page_preserves_existing_archive(self):
+        self.cbz.write_bytes(b"existing output")
+        for payload, error, message in (
+            (None, FileNotFoundError, "Missing EPUB image"),
+            (b"invalid image", ValueError, "Cannot prepare EPUB page"),
+        ):
+            with self.subTest(payload=payload):
+                files = {
+                    "page.xhtml": '<img src="good.png"/><img src="bad.png"/>',
+                    "good.png": self.png("red"),
+                }
+                if payload is not None:
+                    files["bad.png"] = payload
+                self.write_epub(["page.xhtml"], files)
+
+                with self.assertRaisesRegex(error, message):
+                    epub_to_cbz_fixed(self.epub)
+                self.assertEqual(self.cbz.read_bytes(), b"existing output")
+
+    def test_spine_and_html_paths_cannot_leave_epub_directory(self):
+        for href, source in (
+            ("../../page.png", "<p>Empty</p>"),
+            ("page.xhtml", '<img src="%2e%2e/%2e%2e/page.png"/>'),
+        ):
+            with self.subTest(href=href):
+                self.write_epub([href], {"page.xhtml": source})
+
+                with self.assertRaisesRegex(ValueError, "leaves the EPUB directory"):
+                    epub_to_cbz_fixed(self.epub)
+                self.assertFalse(self.cbz.exists())
+
+    def test_missing_spine_document_does_not_package_the_remaining_pages(self):
+        self.write_epub(["page.png", "missing.xhtml"], {"page.png": self.png("red")})
+
+        with self.assertRaisesRegex(FileNotFoundError, "Missing EPUB spine file"):
+            epub_to_cbz_fixed(self.epub)
+
+        self.assertFalse(self.cbz.exists())

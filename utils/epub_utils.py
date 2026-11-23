@@ -1,45 +1,49 @@
 # utils/epub_utils.py
-from logging import root
 import os
 import zipfile
-import posixpath
 import xml.etree.ElementTree as ET
 from typing import List
 import re
+from urllib.parse import unquote, urlsplit
 
 
 def extract_epub(epub_path: str, extract_dir: str):
     """解压 EPUB 到指定目录"""
     with zipfile.ZipFile(epub_path, "r") as z:
         for member in z.infolist():
-            target = os.path.abspath(os.path.join(extract_dir, member.filename))
-            extract_dir_abs = os.path.abspath(extract_dir)
-            if not target.startswith(extract_dir_abs + os.sep):
-                raise Exception(f"unsafe zip path: {member.filename}")
+            _resolve_inside_epub(extract_dir, member.filename, extract_dir)
             z.extract(member, extract_dir)
 
 
-def normalize_href(path_str: str) -> str:
-    """规范化 href 路径"""
-    from urllib.parse import unquote
+def _resolve_inside_epub(base_dir: str, path: str, epub_root: str) -> str:
+    path = path.replace("\\", "/")
+    root = os.path.realpath(epub_root)
+    if path.startswith("/") or ":" in path or "\x00" in path:
+        raise ValueError(f"Unsafe EPUB path: {path}")
+    target = os.path.realpath(os.path.join(base_dir, path))
+    if os.path.commonpath((root, target)) != root:
+        raise ValueError(f"Path leaves the EPUB directory: {path}")
+    return target
 
-    path_str = unquote(path_str)
-    path_str = path_str.replace("\\", "/")
-    path_str = path_str.split("#", 1)[0]
-    return posixpath.normpath(path_str)
 
-
-def resolve_fs_path(base_dir: str, rel_path: str) -> str:
-    """将 href 相对路径转为本地文件路径"""
-    rel_path = normalize_href(rel_path)
-    return os.path.normpath(os.path.join(base_dir, *rel_path.split("/")))
+def resolve_fs_path(base_dir: str, href: str, epub_root: str) -> str | None:
+    """Resolve a local EPUB URL, or return None for an external resource."""
+    if re.match(r"^[a-z]:", href, flags=re.I):
+        raise ValueError(f"Unsafe EPUB path: {href}")
+    url = urlsplit(href.replace("\\", "/"))
+    if url.scheme or url.netloc or not url.path:
+        return None
+    return _resolve_inside_epub(base_dir, unquote(url.path), epub_root)
 
 
 def find_opf_path(extract_dir: str) -> str:
     """从 META-INF/container.xml 找到 OPF 文件路径"""
     container_path = os.path.join(extract_dir, "META-INF", "container.xml")
-    if not os.path.exists(container_path):
-        raise Exception("META-INF/container.xml not found")
+    if not os.path.isfile(container_path):
+        legacy_opf = os.path.join(extract_dir, "vol.opf")
+        if os.path.isfile(legacy_opf):
+            return legacy_opf
+        raise FileNotFoundError("EPUB has no META-INF/container.xml or vol.opf")
 
     tree = ET.parse(container_path)
     root = tree.getroot()
@@ -47,11 +51,14 @@ def find_opf_path(extract_dir: str) -> str:
         if elem.tag.endswith("rootfile"):
             full_path = elem.attrib.get("full-path")
             if full_path:
-                return resolve_fs_path(extract_dir, full_path)
-    raise Exception("OPF not found in container.xml")
+                opf_path = resolve_fs_path(extract_dir, full_path, extract_dir)
+                if not opf_path or not os.path.isfile(opf_path):
+                    raise FileNotFoundError(f"OPF not found in EPUB: {full_path}")
+                return opf_path
+    raise ValueError("OPF not found in container.xml")
 
 
-def parse_opf(opf_path: str):
+def parse_opf(opf_path: str, epub_root: str):
     tree = ET.parse(opf_path)
     root = tree.getroot()
     manifest = {}
@@ -66,7 +73,7 @@ def parse_opf(opf_path: str):
                 manifest[item_id] = {
                     "href": href,
                     "media_type": media_type,
-                    "local_path": resolve_fs_path(os.path.dirname(opf_path), href)
+                    "local_path": resolve_fs_path(os.path.dirname(opf_path), href, epub_root)
                 }
 
     # 再解析 spine
@@ -74,18 +81,21 @@ def parse_opf(opf_path: str):
     for elem in root.iter():
         if elem.tag.endswith("itemref"):
             idref = elem.attrib.get("idref")
-            if idref and idref in manifest:
-                spine.append(manifest[idref])
+            if idref not in manifest:
+                raise ValueError(f"Missing OPF manifest item for spine entry: {idref}")
+            item = manifest[idref]
+            if not item["local_path"] or not os.path.isfile(item["local_path"]):
+                raise FileNotFoundError(f"Missing EPUB spine file: {item['href']}")
+            spine.append(item)
 
     return manifest, spine, os.path.dirname(opf_path)
 
 
 # spine_dicts[i] = {"id": ..., "href": ..., "media_type": ..., "local_path": ...}
 def get_html_files_by_spine(temp_dir: str):
-    opf_path = os.path.join(temp_dir, "vol.opf")
-    manifest, spine, base_dir = parse_opf(opf_path)
-    html_files = [item["local_path"] for item in spine if os.path.exists(item["local_path"])]
-    return html_files, spine
+    opf_path = find_opf_path(temp_dir)
+    _, spine, _ = parse_opf(opf_path, temp_dir)
+    return [item["local_path"] for item in spine], spine
 
 
 def get_html_files_by_dir_fallback(temp_dir: str) -> List[str]:

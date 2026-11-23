@@ -1,6 +1,7 @@
 # images/splitter.py
 import os
 import re
+import tempfile
 from typing import List
 
 import numpy as np
@@ -345,11 +346,28 @@ def rotate_split_part(im: Image.Image) -> Image.Image:
     return im.rotate(ROTATE_DEGREE, expand=True)
 
 
-def _save_unsplit_rotated_page(im: Image.Image, out_dir: str, base: str, ext: str) -> list[str]:
-    """Honor EPUB orientation even when the spread cannot be safely split."""
-    path = os.path.join(out_dir, f"{base}__ROTATED{ext}")
-    save_image_part(rotate_split_part(im), path)
-    return [path]
+def _save_unsplit_rotated_page(im: Image.Image, out_dir: str, ext: str) -> str:
+    fd, path = tempfile.mkstemp(prefix="rotated_", suffix=ext, dir=out_dir)
+    os.close(fd)
+    try:
+        save_image_part(rotate_split_part(im), path)
+    except Exception:
+        os.remove(path)
+        raise
+    return path
+
+
+def prepare_epub_page(img_path: str, out_dir: str, *, rotate: bool) -> str:
+    """Validate the image before packaging and honor this page's rotation tag."""
+    try:
+        with Image.open(img_path) as im:
+            im.load()
+            if rotate:
+                ext = os.path.splitext(img_path)[1].lower()
+                return _save_unsplit_rotated_page(im, out_dir, ext)
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise ValueError(f"Cannot prepare EPUB page {img_path}: {exc}") from exc
+    return img_path
 
 
 # --- Helper to rotate all split parts if needed ---
@@ -1187,10 +1205,10 @@ def split_wide_image_if_needed(
     if should_skip_by_filename(img_path):
         return [img_path]  # 尾页/版权页保护
 
+    base = os.path.splitext(os.path.basename(img_path))[0]
     try:
         with Image.open(img_path) as im:
             w, h = im.size
-            base = os.path.splitext(os.path.basename(img_path))[0]
             ext = os.path.splitext(img_path)[1].lower()
             rotate_hint = get_epub_rotate_hint(img_path)
 
@@ -1200,7 +1218,7 @@ def split_wide_image_if_needed(
                 return [img_path]
 
             print(f"  - rotate [epub-rotate-tag:preserve-whole-page] {base} {w}x{h}")
-            return _save_unsplit_rotated_page(im, out_dir, base, ext)
+            return [_save_unsplit_rotated_page(im, out_dir, ext)]
 
     except Exception as e:
         print(f"  - split failed [{base}]: {e}")

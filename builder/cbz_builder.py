@@ -19,10 +19,14 @@ def make_cbz(image_paths, output_cbz, comicinfo_xml=None):
     os.close(fd)
     try:
         with zipfile.ZipFile(temporary_cbz, "w", compression=zipfile.ZIP_STORED) as cbz:
-            for idx, img_path in enumerate(image_paths, start=1):
+            page_count = 0
+            for page_count, img_path in enumerate(image_paths, start=1):
                 ext = os.path.splitext(img_path)[1].lower()
-                arcname = f"{idx:04d}{ext}"
+                arcname = f"{page_count:04d}{ext}"
                 cbz.write(img_path, arcname)
+
+            if not page_count:
+                raise ValueError("Cannot create a CBZ without image pages")
 
             if comicinfo_xml:
                 if isinstance(comicinfo_xml, str):

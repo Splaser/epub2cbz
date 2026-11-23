@@ -32,6 +32,8 @@ def build_series_metadata_from_wikitext(
     if parsed.main_manga is None:
         raise ValueError("No Infobox animanga/Manga block found in wikitext")
 
+    # A shared article's categories cannot be attributed to one manga block.
+    article_categories = categories if categories is not None else parsed.categories
     return WikiSeriesMetadata(
         page_title=page_title,
         pageid=pageid,
@@ -40,7 +42,7 @@ def build_series_metadata_from_wikitext(
         summary=summary or extract_lead_summary(wikitext),
         main_manga=parsed.main_manga,
         series_sort=series_sort,
-        categories=list(categories if categories is not None else parsed.categories),
+        categories=list(article_categories) if len(parsed.manga_blocks) == 1 else [],
     )
 
 
