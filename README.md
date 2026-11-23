@@ -58,10 +58,17 @@ beautifulsoup4
 使用 PyInstaller 打包 EPUB 入口：
 
 ```bash
-pyinstaller --onefile --exclude-module cv2 --name epub2cbz main.py
+pyinstaller --onefile --name epub2cbz main.py
 ```
 
-EPUB 入口只按标签旋转图片，打包时可以省略 OpenCV。构建产物对应当前系统和架构。
+EPUB 入口使用 OpenCV 检测低信息页和重复封面。构建产物对应当前系统和架构。
+
+已生成的 CBZ 可用独立修补工具移除已知的 Kmoe 结束广告页。可以同时传入多个文件夹或 CBZ 文件，默认只预览。确认结果后加 `--apply` 原地修补，若需保留原件可同时加 `--backup`。
+
+```powershell
+pyinstaller cbz_repair.spec
+.\dist\cbz_repair.exe "V:\漫画\系列一" "V:\漫画\系列二"
+```
 
 Windows PowerShell 也可以直接运行项目内的固定打包脚本：
 

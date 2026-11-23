@@ -53,6 +53,12 @@ def _is_text_or_catalog_like(stats: dict) -> bool:
 def dedupe_cover_images_cv(
     image_paths: List[str], similarity_threshold: float = 0.95
 ) -> List[str]:
+    return [image_paths[index] for index in cover_indices_to_keep(image_paths, similarity_threshold)]
+
+
+def cover_indices_to_keep(
+    image_paths: List[str], similarity_threshold: float = 0.95
+) -> List[int]:
     """
     CV 封面去重，仅依赖 PIL + OpenCV。
 
@@ -72,12 +78,12 @@ def dedupe_cover_images_cv(
             stats = _image_stats(path)
         except Exception as e:
             print(f"  - keep [cover-dedupe:error {e}] {path}")
-            retained.append(path)
+            retained.append(idx)
             continue
 
         # 第一张永远保留
         if idx == 0:
-            retained.append(path)
+            retained.append(idx)
 
             img = Image.open(path).convert("L")
             arr = np.array(img)
@@ -94,7 +100,7 @@ def dedupe_cover_images_cv(
 
         # 疑似目录/文字页：禁止 CV 去重
         if _is_text_or_catalog_like(stats):
-            retained.append(path)
+            retained.append(idx)
             print(
                 f"  - keep [cover-dedupe:catalog-protect "
                 f"white={stats['white']:.3f} black={stats['black']:.3f} "
@@ -124,7 +130,7 @@ def dedupe_cover_images_cv(
             )
             continue
 
-        retained.append(path)
+        retained.append(idx)
         histograms.append(hist_curr)
         print(
             f"  - keep [cover-dedupe:unique "

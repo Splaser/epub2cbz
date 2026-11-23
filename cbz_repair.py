@@ -1,8 +1,13 @@
+import argparse
+from copy import copy
+from hashlib import sha256
 import os
+from pathlib import Path
 import sys
 import zipfile
 import tempfile
 import shutil
+import xml.etree.ElementTree as ET
 
 from images.filter import get_garbage_image_reason, is_image_file
 from images.splitter import infer_common_page_size, split_wide_image_if_needed
@@ -10,12 +15,10 @@ from builder.cbz_builder import make_cbz
 from metadata.comicinfo import ComicInfo
 from metadata.comicinfo_archive import (
     find_comicinfo_entry_name,
+    is_comicinfo_path,
     write_comicinfo_to_cbz,
 )
-from metadata.epub_comicinfo import (
-    build_comicinfo_xml_for_epub,
-    load_exact_wiki_series_for_dir,
-)
+from metadata.epub_comicinfo import build_comicinfo_xml_for_epub
 
 
 def iter_images_recursive(root_dir: str):
@@ -181,28 +184,141 @@ def get_base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-if __name__ == "__main__":
-    base_dir = get_base_dir()
-    os.chdir(base_dir)
+_KMOE_END_CARD = (86934, "cdc4a0dd92011239fc9d9c5e83667de2fa1722c73f265865760b09f8c3e2d1a9")
 
-    cbz_files = [
-        os.path.join(base_dir, f)
-        for f in os.listdir(base_dir)
-        if f.lower().endswith(".cbz")
-    ]
-    cbz_files.sort()
+
+def is_end_card_name(name):
+    return Path(name.replace("\\", "/")).stem.casefold() == "theendinfo"
+
+
+def end_card_hashes(folder):
+    size, digest = _KMOE_END_CARD
+    hashes_by_size = {size: {digest}}
+    for epub in sorted(folder.iterdir()):
+        if epub.suffix.lower() != ".epub" or not epub.is_file():
+            continue
+        try:
+            with zipfile.ZipFile(epub) as source:
+                for entry in source.infolist():
+                    if is_image_file(entry.filename) and is_end_card_name(entry.filename):
+                        digest = sha256(source.read(entry)).hexdigest()
+                        hashes_by_size.setdefault(entry.file_size, set()).add(digest)
+        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
+            print(f"  - could not read reference {epub.name}: {exc}")
+    return hashes_by_size
+
+
+def update_comicinfo_pages(xml, page_count, removed_indices):
+    root = ET.fromstring(xml, parser=ET.XMLParser(target=ET.TreeBuilder(insert_comments=True)))
+    count = root.find("PageCount")
+    if count is None:
+        count = ET.SubElement(root, "PageCount")
+    count.text = str(page_count)
+    pages = root.find("Pages")
+    if pages is not None:
+        for page in pages.findall("Page"):
+            image = page.get("Image")
+            if image is None:
+                continue
+            index = int(image)
+            if index in removed_indices:
+                pages.remove(page)
+            else:
+                shift = sum(removed < index for removed in removed_indices)
+                page.set("Image", str(index - shift))
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def repair_end_cards(path, hashes_by_size, *, apply=False, backup=False):
+    temporary = None
+    try:
+        with zipfile.ZipFile(path) as source:
+            images = sorted(
+                (entry for entry in source.infolist() if is_image_file(entry.filename)),
+                key=lambda entry: entry.filename.replace("\\", "/").casefold(),
+            )
+            removed = {}
+            for index, entry in enumerate(images):
+                hashes = hashes_by_size.get(entry.file_size)
+                if is_end_card_name(entry.filename) or (
+                    hashes and sha256(source.read(entry)).hexdigest() in hashes
+                ):
+                    removed[entry.header_offset] = index
+                    print(f"  - end card: {entry.filename}")
+            if not removed:
+                return 0
+            page_count = len(images) - len(removed)
+            if not page_count:
+                raise ValueError("Repair would remove all pages")
+            if not apply:
+                return len(removed)
+
+            removed_indices = set(removed.values())
+            fd, temporary = tempfile.mkstemp(prefix=".cbz-repair-", suffix=".part", dir=path.parent)
+            os.close(fd)
+            with zipfile.ZipFile(temporary, "w") as target:
+                target.comment = source.comment
+                for entry in source.infolist():
+                    if entry.header_offset in removed:
+                        continue
+                    data = source.read(entry)
+                    if is_comicinfo_path(entry.filename):
+                        data = update_comicinfo_pages(data, page_count, removed_indices)
+                    target.writestr(copy(entry), data)
+        with zipfile.ZipFile(temporary) as target:
+            if bad_entry := target.testzip():
+                raise ValueError(f"CBZ verification failed at {bad_entry}")
+        if backup:
+            create_backup(str(path))
+        os.replace(temporary, path)
+        return len(removed)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.remove(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Find and remove known Kmoe end cards from CBZ files.")
+    parser.add_argument("paths", nargs="*", type=Path, help="CBZ files or folders containing CBZ files")
+    parser.add_argument("--apply", action="store_true", help="Apply repairs in place")
+    parser.add_argument("--backup", action="store_true", help="Keep a .cbz.bak backup when applying repairs")
+    args = parser.parse_args()
+    paths = args.paths or [Path(get_base_dir())]
+    cbz_files = {}
+    failed = False
+    for item in paths:
+        if item.is_dir():
+            for path in sorted(item.iterdir()):
+                if path.is_file() and path.suffix.lower() == ".cbz":
+                    cbz_files[path.resolve()] = None
+        elif item.is_file() and item.suffix.lower() == ".cbz":
+            cbz_files[item.resolve()] = None
+        else:
+            print(f"CBZ file or folder not found: {item}")
+            failed = True
 
     if not cbz_files:
-        print(f"❌ No cbz files found in: {base_dir}")
+        print("No CBZ files found.")
+        return 1 if failed else 0
 
-    wiki_series_metadata = None
-    if cbz_files:
-        wiki_series_metadata = load_exact_wiki_series_for_dir(base_dir)
+    folder_hashes = {}
+    changed = total_removed = 0
+    for path in cbz_files:
+        print(f"Checking {path}")
+        try:
+            if path.parent not in folder_hashes:
+                folder_hashes[path.parent] = end_card_hashes(path.parent)
+            count = repair_end_cards(path, folder_hashes[path.parent], apply=args.apply, backup=args.backup)
+            if count:
+                changed += 1
+                total_removed += count
+        except (OSError, ValueError, RuntimeError, ET.ParseError, zipfile.BadZipFile) as exc:
+            print(f"  - failed: {exc}")
+            failed = True
+    action = "Applied" if args.apply else "Preview"
+    print(f"{action}: {len(cbz_files)} checked, {changed} matched, {total_removed} end card(s).")
+    return int(failed)
 
-    for cbz in cbz_files:
-        repair_cbz(
-            cbz,
-            overwrite=True,
-            backup=False,
-            wiki_series_metadata=wiki_series_metadata,
-        )
+
+if __name__ == "__main__":
+    sys.exit(main())

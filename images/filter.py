@@ -45,6 +45,15 @@ def should_skip_html_by_content(html_path: str) -> bool:
     return hit_count >= 1
 
 
+def tail_ad_keyword(html_path: str) -> str | None:
+    try:
+        with open(html_path, "r", encoding="utf-8", errors="ignore") as source:
+            content = source.read().lower()
+    except OSError:
+        return None
+    return next((keyword for keyword in TAIL_AD_KEYWORDS if keyword in content), None)
+
+
 def is_probable_cover_html(html_path: str) -> bool:
     """判断是否可能是封面类 HTML 页面"""
     name = os.path.basename(html_path).lower()
@@ -157,7 +166,7 @@ def filter_html_files(html_files: List[str]) -> List[str]:
     # 遍历 spine HTML
     for idx, html_path in enumerate(html_files):
         is_last_html = idx == len(html_files) - 1
-        stem = os.path.splitext(html_path)[0].lower()
+        stem = os.path.splitext(os.path.basename(html_path))[0].lower()
 
         # 文件名秒杀
         if should_skip_html_by_name(html_path):
@@ -170,12 +179,7 @@ def filter_html_files(html_files: List[str]) -> List[str]:
 
         # 最后一页尾页关键字秒杀
         if is_last_html:
-            try:
-                with open(html_path, "r", encoding="utf-8", errors="ignore") as f:
-                    last_content = f.read().lower()
-            except Exception:
-                last_content = ""
-            tail_hit = next((k for k in TAIL_AD_KEYWORDS if k.lower() in last_content), None)
+            tail_hit = tail_ad_keyword(html_path)
             if tail_hit or stem in {"end", "ad", "ads", "adv"}:
                 log_skip(f"last-html-tail:{tail_hit}", html_path)
                 continue

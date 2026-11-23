@@ -9,6 +9,14 @@ import sys
 import tempfile
 from typing import Callable, Optional
 from builder.cbz_builder import make_cbz
+from images.cv_cover_dedup import cover_indices_to_keep, is_rgb_color_image
+from images.filter import (
+    get_garbage_image_reason,
+    log_skip,
+    should_skip_html_by_content,
+    should_skip_html_by_name,
+    tail_ad_keyword,
+)
 from images.splitter import prepare_epub_page
 from metadata.epub_comicinfo import (
     build_comicinfo_xml_for_epub,
@@ -21,27 +29,60 @@ from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all
 from utils.metadata_utils import build_output_cbz_name, group_epub_volumes, split_volume_part
 
 
-_EPUB_AD_DOCUMENTS = {"createby", "createinfo", "endinfo", "theendinfo", "ad", "ads", "adv", "advertisement"}
+_EPUB_AD_STEMS = {"createby", "createinfo", "endinfo", "theendinfo", "ad", "ads", "adv", "advertisement"}
 
 
-def collect_epub_pages(epub_root: str) -> list[tuple[str, bool]]:
+def collect_epub_pages(epub_root: str) -> tuple[list[tuple[str, bool]], list[tuple[str, bool]]]:
     spine_files, spine = get_html_files_by_spine(epub_root)
     if not spine:
-        return [(path, False) for path in fallback_all_images(epub_root)]
+        pages = [(path, False) for path in fallback_all_images(epub_root)]
+        return pages[:4], pages[4:]
 
+    opening_pages = []
     pages = []
-    for path, item in zip(spine_files, spine):
+    for index, (path, item) in enumerate(zip(spine_files, spine)):
+        target = opening_pages if index < 4 else pages
         stem, ext = os.path.splitext(os.path.basename(path).lower())
         if is_image_file(path):
-            pages.append((path, False))
+            target.append((path, False))
         elif ext in {".html", ".htm", ".xhtml", ".svg"} or item["media_type"] in {
             "application/xhtml+xml", "text/html", "image/svg+xml",
         }:
-            if stem not in _EPUB_AD_DOCUMENTS:
-                pages.extend(extract_image_references(path, epub_root))
+            if stem in _EPUB_AD_STEMS or should_skip_html_by_name(path):
+                log_skip("html-name", path)
+                continue
+            if should_skip_html_by_content(path):
+                log_skip("html-content", path)
+                continue
+            if index == len(spine) - 1:
+                tail_hit = tail_ad_keyword(path)
+                if tail_hit or stem == "end":
+                    log_skip(f"last-html-tail:{tail_hit or stem}", path)
+                    continue
+            target.extend(extract_image_references(path, epub_root))
         else:
             raise ValueError(f"Unsupported EPUB spine document: {item['href']}")
-    return pages
+    return opening_pages, pages
+
+
+def filter_opening_pages(images: list[str]) -> list[str]:
+    if len(images) < 2:
+        return images
+
+    candidates = [images[0]]
+    for path in images[1:]:
+        if cmp(images[0], path, shallow=False):
+            log_skip("cover-dedupe:identical", path)
+        else:
+            candidates.append(path)
+
+    keep = set(cover_indices_to_keep(candidates))
+    if not any(is_rgb_color_image(candidates[index]) for index in keep):
+        for index, path in enumerate(candidates):
+            if is_rgb_color_image(path):
+                keep.add(index)
+                break
+    return [path for index, path in enumerate(candidates) if index in keep]
 
 
 def volume_output_name(epubs: tuple[str, ...], series_title: str | None = None) -> str:
@@ -67,10 +108,24 @@ def prepare_epub_pages(epub_path: str, work_dir: str) -> tuple[list[str], str | 
     os.makedirs(epub_root)
     os.mkdir(rotated_dir)
     extract_epub(epub_path, epub_root)
-    pages = collect_epub_pages(epub_root)
-    if not pages:
+    opening_pages, pages = collect_epub_pages(epub_root)
+    images = []
+    opening_images = []
+    for references, target in ((opening_pages, opening_images), (pages, images)):
+        for path, rotate in references:
+            stem = os.path.splitext(os.path.basename(path).lower())[0]
+            if stem in _EPUB_AD_STEMS:
+                log_skip("ad-image-name", path)
+                continue
+            reason = get_garbage_image_reason(path)
+            if reason:
+                log_skip(f"garbage-image:{reason}", path)
+                continue
+            target.append(prepare_epub_page(path, rotated_dir, rotate=rotate))
+
+    images = filter_opening_pages(opening_images) + images
+    if not images:
         raise ValueError(f"EPUB has no image pages: {epub_path}")
-    images = [prepare_epub_page(path, rotated_dir, rotate=rotate) for path, rotate in pages]
     writer, publisher = read_epub_credit_fields(epub_root)
     return images, writer, publisher
 
@@ -84,12 +139,6 @@ def page_digest(path: str) -> bytes:
 
 
 def merge_split_volume_pages(upper: list[str], lower: list[str]) -> list[str]:
-    # The Kmoe end card belongs at the end of the combined volume.
-    if (
-        all(os.path.splitext(os.path.basename(pages[-1]))[0].lower() == "theendinfo" for pages in (upper, lower))
-        and cmp(upper[-1], lower[-1], shallow=False)
-    ):
-        upper = upper[:-1]
     if upper and cmp(upper[0], lower[0], shallow=False):
         lower = lower[1:]
 

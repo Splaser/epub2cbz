@@ -51,7 +51,7 @@ class EpubConversionTests(unittest.TestCase):
             for name, content in files.items():
                 archive.writestr(str(Path(opf).parent.joinpath(name).as_posix()), content)
 
-    def test_nested_opf_preserves_spine_order_white_pages_and_rotation_per_reference(self):
+    def test_nested_opf_filters_small_white_pages_and_preserves_order_and_rotation(self):
         red, blue, white = (self.png(color) for color in ("red", "blue", "white"))
         self.write_epub(
             ["html/z.xhtml", "html/a.xhtml", "images/white.png", "html/repeat.xhtml"],
@@ -76,18 +76,17 @@ class EpubConversionTests(unittest.TestCase):
             self.assertIsNone(archive.testzip())
             self.assertEqual(
                 archive.namelist(),
-                ["0001.png", "0002.png", "0003.png", "0004.png", "ComicInfo.xml"],
+                ["0001.png", "0002.png", "0003.png", "ComicInfo.xml"],
             )
             for name, color in (("0001.png", (255, 0, 0)), ("0002.png", (0, 0, 255))):
                 with Image.open(io.BytesIO(archive.read(name))) as page:
                     self.assertEqual(page.size, (8, 12))
                     self.assertEqual(page.getpixel((0, 0)), color)
-            self.assertEqual(archive.read("0003.png"), white)
-            self.assertEqual(archive.read("0004.png"), red)
-            self.assertEqual(archive.getinfo("0004.png").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.read("0003.png"), red)
+            self.assertEqual(archive.getinfo("0003.png").compress_type, zipfile.ZIP_STORED)
             self.assertEqual(archive.getinfo("ComicInfo.xml").compress_type, zipfile.ZIP_DEFLATED)
             info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
-            self.assertEqual(info.page_count, 4)
+            self.assertEqual(info.page_count, 3)
 
     def test_container_takes_precedence_over_legacy_opf(self):
         self.write_epub(["page.png"], {"page.png": self.png("red")})
@@ -123,7 +122,7 @@ class EpubConversionTests(unittest.TestCase):
             "overlap1.png": self.png("green"),
             "overlap2.png": self.png("yellow"),
             "lower.png": self.png("orange"),
-            "theendinfo.png": self.png("white"),
+            "theendinfo.png": self.png("purple"),
         }
         for epub, order in (
             (upper, ["cover.png", "upper.png", "overlap1.png", "overlap2.png", "theendinfo.png"]),
@@ -143,13 +142,14 @@ class EpubConversionTests(unittest.TestCase):
             self.assertEqual(main(), 0)
 
         with zipfile.ZipFile(self.cbz) as archive:
-            order = ["cover.png", "upper.png", "overlap1.png", "overlap2.png", "lower.png", "theendinfo.png"]
+            order = ["cover.png", "upper.png", "overlap1.png", "overlap2.png", "lower.png"]
+            self.assertEqual(len(archive.namelist()), 6)
             self.assertEqual(
-                [archive.read(f"{index:04}.png") for index in range(1, 7)],
+                [archive.read(f"{index:04}.png") for index in range(1, 6)],
                 [pages[name] for name in order],
             )
             info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
-            self.assertEqual((info.number, info.page_count, info.count), ("1", 6, 1))
+            self.assertEqual((info.number, info.page_count, info.count), ("1", 5, 1))
             self.assertIsNone(archive.testzip())
         self.assertEqual(list(self.series_dir.glob("*.cbz")), [self.cbz])
 
@@ -186,15 +186,18 @@ class EpubConversionTests(unittest.TestCase):
                     self.assertEqual((info.writer, info.publisher, info.number), (["水木茂"], expected, "1"))
             lookup.assert_not_called()
 
-    def test_legacy_opf_keeps_white_page_and_skips_explicit_ad_document(self):
-        white = self.png("white")
+    def test_legacy_opf_filters_duplicate_cover_ad_document_and_end_card_reference(self):
+        cover = self.png("blue")
         self.write_epub(
-            ["page.xhtml", "ad.xhtml"],
+            ["page.xhtml", "cover-copy.png", "ad.xhtml", "end-card.xhtml"],
             {
-                "page.xhtml": '<img src="white.png"/>',
-                "ad.xhtml": '<img src="ad.png"/>',
-                "white.png": white,
-                "ad.png": self.png("red"),
+                "page.xhtml": '<img src="cover.png"/>',
+                "cover.png": cover,
+                "cover-copy.png": cover,
+                "ad.xhtml": '<img src="promo.png"/>',
+                "promo.png": self.png("red"),
+                "end-card.xhtml": '<img src="%74heendinfo.png"/>',
+                "theendinfo.png": self.png("purple"),
             },
             opf="vol.opf",
         )
@@ -203,7 +206,7 @@ class EpubConversionTests(unittest.TestCase):
 
         with zipfile.ZipFile(self.cbz) as archive:
             self.assertEqual(archive.namelist(), ["0001.png"])
-            self.assertEqual(archive.read("0001.png"), white)
+            self.assertEqual(archive.read("0001.png"), cover)
 
     def test_zero_pages_never_create_or_replace_an_archive(self):
         self.write_epub(["page.xhtml"], {"page.xhtml": "<p>No image pages</p>"})
