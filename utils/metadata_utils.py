@@ -11,6 +11,41 @@ from .consts import (
     SPECIAL_KEYWORDS,
 )
 
+_SPLIT_VOLUME = re.compile(
+    r"(?P<base>.*\d(?:\s*[卷冊册])?)[\s.．_-]*"
+    r"(?:[（(]\s*)?(?P<part>[上下])[冊册]?\s*(?:[）)])?$"
+)
+
+
+def split_volume_part(path: str) -> tuple[str, str] | None:
+    stem = os.path.splitext(os.path.basename(path))[0]
+    match = _SPLIT_VOLUME.fullmatch(stem)
+    if match:
+        return match["base"], match["part"]
+    return None
+
+
+def group_epub_volumes(paths: list[str]) -> list[tuple[str, ...]]:
+    """Group unambiguous upper/lower pairs from the same directory and release."""
+    jobs = []
+    editions = {}
+    for path in paths:
+        part = split_volume_part(path)
+        if part is None:
+            jobs.append((path,))
+            continue
+        base, side = part
+        sides = editions.setdefault((os.path.dirname(path), base.casefold()), {"上": [], "下": []})
+        sides[side].append(path)
+
+    for sides in editions.values():
+        upper, lower = sides["上"], sides["下"]
+        if len(upper) == len(lower) == 1:
+            jobs.append((upper[0], lower[0]))
+        else:
+            jobs.extend((path,) for path in upper + lower)
+    return sorted(jobs, key=min)
+
 
 def extract_special_label(cleaned: str) -> str | None:
     for kw in SPECIAL_KEYWORDS:

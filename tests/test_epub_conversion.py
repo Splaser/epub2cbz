@@ -4,11 +4,12 @@ import unittest
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
 from builder.cbz_builder import make_cbz
-from main import epub_to_cbz_fixed
+from main import epub_to_cbz_fixed, main
 from metadata.comicinfo import ComicInfo
 from metadata.wiki_models import WikiMangaInfo, WikiSeriesMetadata
 
@@ -108,6 +109,62 @@ class EpubConversionTests(unittest.TestCase):
         self.assertEqual((info.series, info.series_sort, info.localized_series), ("舊版系列",) * 3)
         self.assertEqual(info.number, "1")
         self.assertFalse(self.cbz.exists())
+
+    def test_cli_merges_upper_and_lower_with_unique_pages_and_combined_tags(self):
+        upper = self.series_dir / "[Kmoe][Example]卷01.上.epub"
+        lower = self.series_dir / "[Kmoe][Example]卷01.下.epub"
+        pages = {
+            "cover.png": self.png("red"),
+            "upper.png": self.png("blue"),
+            "overlap1.png": self.png("green"),
+            "overlap2.png": self.png("yellow"),
+            "lower.png": self.png("orange"),
+            "theendinfo.png": self.png("white"),
+        }
+        for epub, order in (
+            (upper, ["cover.png", "upper.png", "overlap1.png", "overlap2.png", "theendinfo.png"]),
+            (lower, ["cover.png", "overlap1.png", "overlap2.png", "lower.png", "theendinfo.png"]),
+        ):
+            self.epub = epub
+            self.write_epub(order, {name: pages[name] for name in order})
+        wiki = WikiSeriesMetadata(
+            page_title="Example", pageid=1, page_url=None, wikibase_item=None,
+            summary=None, main_manga=WikiMangaInfo(title="Example"),
+        )
+
+        # Passing the lower half still puts the upper half first.
+        with patch("sys.argv", ["epub2cbz", str(lower)]), patch(
+            "main.load_wiki_metadata_for_main", return_value=wiki
+        ):
+            self.assertEqual(main(), 0)
+
+        with zipfile.ZipFile(self.cbz) as archive:
+            order = ["cover.png", "upper.png", "overlap1.png", "overlap2.png", "lower.png", "theendinfo.png"]
+            self.assertEqual(
+                [archive.read(f"{index:04}.png") for index in range(1, 7)],
+                [pages[name] for name in order],
+            )
+            info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
+            self.assertEqual((info.number, info.page_count, info.count), ("1", 6, 1))
+            self.assertIsNone(archive.testzip())
+        self.assertEqual(list(self.series_dir.glob("*.cbz")), [self.cbz])
+
+    def test_batch_keeps_unpaired_part_and_preserves_distinct_covers(self):
+        for name, color in (("卷01上", "red"), ("卷01下", "blue"), ("卷02.上", "green")):
+            self.epub = self.series_dir / (name + ".epub")
+            self.write_epub(["cover.png"], {"cover.png": self.png(color)})
+
+        with patch("sys.argv", ["epub2cbz"]), patch("main.get_base_dir", return_value=str(self.series_dir)), patch(
+            "main.load_wiki_metadata_for_main", return_value=None
+        ):
+            self.assertEqual(main(), 0)
+        with zipfile.ZipFile(self.cbz) as archive:
+            self.assertEqual(archive.read("0001.png"), self.png("red"))
+            self.assertEqual(archive.read("0002.png"), self.png("blue"))
+            info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
+            self.assertEqual((info.series, info.number, info.page_count, info.count), ("Example", "1", 2, 2))
+        with zipfile.ZipFile(self.series_dir / "Example - 第002卷（上）.cbz") as archive:
+            self.assertEqual(archive.read("0001.png"), self.png("green"))
 
     def test_legacy_opf_keeps_white_page_and_skips_explicit_ad_document(self):
         white = self.png("white")

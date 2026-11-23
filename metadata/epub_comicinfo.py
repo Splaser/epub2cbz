@@ -12,10 +12,12 @@ from utils.metadata_utils import (
     clean_series_title,
     extract_special_label,
     extract_volume_number,
+    group_epub_volumes,
     strip_regional_edition_suffix,
     strip_series_prefix,
 )
 
+from .comicinfo import ComicInfo
 from .wiki_client import WikiClient
 from .wiki_models import WikiMangaInfo, WikiPageData, WikiSearchItem, WikiSeriesMetadata
 from .wiki_scraper import build_series_metadata_from_page_data
@@ -430,8 +432,9 @@ def build_comicinfo_xml_for_epub(
     page_count: int,
     wiki_series: Optional[WikiSeriesMetadata] = None,
     series_title: Optional[str] = None,
+    keep_local_index: bool = False,
 ) -> Optional[bytes]:
-    if wiki_series is None:
+    if wiki_series is None and not keep_local_index:
         return None
 
     epub = Path(epub_path)
@@ -448,16 +451,25 @@ def build_comicinfo_xml_for_epub(
         print(f"  - skip ComicInfo: cannot infer volume number from {epub.name}")
         return None
 
-    comicinfo = wiki_series_to_comicinfo(
-        wiki_series,
-        volume_number or 0,
-        title=cleaned_title if is_special else None,
-        series_title=series_name,
-        # Kavita prefers SeriesSort over Series for the displayed series name.
-        series_sort=series_name,
-        write_number=volume_number is not None,
-        page_count=page_count,
-    )
+    if wiki_series is None:
+        comicinfo = ComicInfo(
+            series=series_name,
+            series_sort=series_name,
+            localized_series=series_name,
+            number=str(volume_number) if volume_number is not None else None,
+            page_count=page_count,
+        )
+    else:
+        comicinfo = wiki_series_to_comicinfo(
+            wiki_series,
+            volume_number or 0,
+            title=cleaned_title if is_special else None,
+            series_title=series_name,
+            # Kavita prefers SeriesSort over Series for the displayed series name.
+            series_sort=series_name,
+            write_number=volume_number is not None,
+            page_count=page_count,
+        )
     if is_special:
         comicinfo.format = "Special"
 
@@ -474,8 +486,8 @@ def infer_volume_number(filename: str) -> Optional[int | str]:
 
 
 def count_epubs_in_dir(path: Path) -> Optional[int]:
-    count = sum(1 for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".epub")
-    return count or None
+    epubs = [str(p) for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".epub"]
+    return len(group_epub_volumes(epubs)) or None
 
 
 def _title_key(value: str) -> str:

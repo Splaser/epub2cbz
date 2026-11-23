@@ -1,4 +1,7 @@
 import argparse
+from collections import Counter
+from filecmp import cmp
+from hashlib import sha256
 import html
 import os
 import re
@@ -15,7 +18,7 @@ from metadata.epub_comicinfo import (
 from metadata.wiki_models import WikiSearchItem
 from parser.html_parser import extract_image_references, is_image_file
 from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
-from utils.metadata_utils import build_output_cbz_name
+from utils.metadata_utils import build_output_cbz_name, group_epub_volumes, split_volume_part
 
 
 _EPUB_AD_DOCUMENTS = {"createby", "createinfo", "endinfo", "theendinfo", "ad", "ads", "adv", "advertisement"}
@@ -41,27 +44,79 @@ def collect_epub_pages(epub_root: str) -> list[tuple[str, bool]]:
     return pages
 
 
-def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None, *, series_title=None):
-    epub_path = os.path.abspath(epub_path)
+def volume_output_name(epubs: tuple[str, ...], series_title: str | None = None) -> str:
     if series_title is not None:
         series_title = series_title.strip()
         if not series_title or re.search(r'[<>:"/\\|?*\x00-\x1f]', series_title):
             raise ValueError("Series title must be a valid filename prefix")
-    output_name = build_output_cbz_name(epub_path, series_name=series_title)
+    epub_path = epubs[0]
+    part = split_volume_part(epub_path)
+    if part is None:
+        return build_output_cbz_name(epub_path, series_name=series_title)
+    stem, side = part
+    base_epub = os.path.join(os.path.dirname(epub_path), stem + ".epub")
+    output_name = build_output_cbz_name(base_epub, series_name=series_title)
+    if len(epubs) == 1:
+        return f"{os.path.splitext(output_name)[0]}（{side}）.cbz"
+    return output_name
+
+
+def prepare_epub_pages(epub_path: str, work_dir: str) -> list[str]:
+    epub_root = os.path.join(work_dir, "epub")
+    rotated_dir = os.path.join(work_dir, "rotated")
+    os.makedirs(epub_root)
+    os.mkdir(rotated_dir)
+    extract_epub(epub_path, epub_root)
+    pages = collect_epub_pages(epub_root)
+    if not pages:
+        raise ValueError(f"EPUB has no image pages: {epub_path}")
+    return [prepare_epub_page(path, rotated_dir, rotate=rotate) for path, rotate in pages]
+
+
+def page_digest(path: str) -> bytes:
+    digest = sha256()
+    with open(path, "rb") as image:
+        for chunk in iter(lambda: image.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def merge_split_volume_pages(upper: list[str], lower: list[str]) -> list[str]:
+    # The Kmoe end card belongs at the end of the combined volume.
+    if (
+        all(os.path.splitext(os.path.basename(pages[-1]))[0].lower() == "theendinfo" for pages in (upper, lower))
+        and cmp(upper[-1], lower[-1], shallow=False)
+    ):
+        upper = upper[:-1]
+    if upper and cmp(upper[0], lower[0], shallow=False):
+        lower = lower[1:]
+
+    # Look for an exact suffix/prefix match at the join. Limit comparison to
+    # nearby pages, since a repeated image elsewhere can be intentional.
+    window = min(16, len(upper), len(lower))
+    if window:
+        ending = [page_digest(path) for path in upper[-window:]]
+        opening = [page_digest(path) for path in lower[:window]]
+        for overlap in range(window, 0, -1):
+            if ending[-overlap:] == opening[:overlap]:
+                lower = lower[overlap:]
+                break
+    return upper + lower
+
+
+def convert_epub_volume(epubs: tuple[str, ...], wiki_series_metadata=None, *, series_title=None):
+    epub_path = epubs[0]
+    output_name = volume_output_name(epubs, series_title)
+    if series_title is not None:
+        series_title = series_title.strip()
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
     with tempfile.TemporaryDirectory(prefix="epub2cbz_") as temp_dir:
-        epub_root = os.path.join(temp_dir, "epub")
-        rotated_dir = os.path.join(temp_dir, "rotated")
-        os.mkdir(epub_root)
-        os.mkdir(rotated_dir)
-        extract_epub(epub_path, epub_root)
-        pages = collect_epub_pages(epub_root)
-        if not pages:
-            raise ValueError(f"EPUB has no image pages: {epub_path}")
-        final_images = [
-            prepare_epub_page(path, rotated_dir, rotate=rotate)
-            for path, rotate in pages
-        ]
+        final_images = prepare_epub_pages(epub_path, os.path.join(temp_dir, "first"))
+        if len(epubs) == 2:
+            lower = prepare_epub_pages(epubs[1], os.path.join(temp_dir, "second"))
+            original_count = len(final_images) + len(lower)
+            final_images = merge_split_volume_pages(final_images, lower)
+            print(f"  - Removed {original_count - len(final_images)} duplicate pages", flush=True)
 
         comicinfo_xml = build_comicinfo_xml_for_epub(
             epub_path=epub_path,
@@ -69,10 +124,15 @@ def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None, *, series_title=None
             page_count=len(final_images),
             wiki_series=wiki_series_metadata,
             series_title=series_title,
+            keep_local_index=len(epubs) == 2,
         )
 
         make_cbz(final_images, output_cbz, comicinfo_xml=comicinfo_xml)
-        print(f"✅ CBZ created: {output_cbz}, total pages: {len(final_images)}")
+        print(f"✅ CBZ created: {output_cbz}, total pages: {len(final_images)}", flush=True)
+
+
+def epub_to_cbz_fixed(epub_path, wiki_series_metadata=None, *, series_title=None):
+    convert_epub_volume((os.path.abspath(epub_path),), wiki_series_metadata, series_title=series_title)
 
 
 def get_base_dir():
@@ -83,7 +143,7 @@ def get_base_dir():
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Convert one EPUB or scan the executable's directory for EPUBs.")
-    parser.add_argument("epub", nargs="?", help="Convert only this EPUB file.")
+    parser.add_argument("epub", nargs="?", help="Convert this EPUB and its matching upper/lower part, if present.")
     parser.add_argument("--series-title", help="Use this series name for the CBZ filename and ComicInfo.")
     parser.add_argument(
         "--wiki-url",
@@ -138,36 +198,64 @@ def load_wiki_metadata_for_main(base_dir, wiki_url=None):
     )
 
 
-if __name__ == "__main__":
+def main():
     args = parse_args()
+    epub_path = None
     if args.epub:
         epub_path = os.path.abspath(args.epub)
         if not epub_path.lower().endswith(".epub") or not os.path.isfile(epub_path):
             print(f"❌ EPUB file not found: {epub_path}", file=sys.stderr)
             sys.exit(1)
-        base_dir, epub_name = os.path.split(epub_path)
-        epub_files = [epub_name]
+        base_dir = os.path.dirname(epub_path)
     else:
         base_dir = get_base_dir()
-        epub_files = sorted(f for f in os.listdir(base_dir) if f.lower().endswith(".epub"))
 
-    if not epub_files:
+    epub_files = [
+        entry.path for entry in os.scandir(base_dir)
+        if entry.name.lower().endswith(".epub") and entry.is_file()
+    ]
+    if epub_path and epub_path not in epub_files:
+        # The caller can use a different spelling on a case-insensitive volume.
+        epub_path = next(
+            (path for path in epub_files if os.path.samefile(path, epub_path)), epub_path
+        )
+        if epub_path not in epub_files:
+            epub_files.append(epub_path)
+    volumes = group_epub_volumes(epub_files)
+    if epub_path:
+        volumes = [volume for volume in volumes if epub_path in volume]
+    if not volumes:
         print(f"❌ No epub files found in: {base_dir}")
+        return 0
 
-    wiki_series_metadata = None
-    if epub_files:
-        wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
+    try:
+        output_names = [volume_output_name(volume, args.series_title) for volume in volumes]
+    except ValueError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
+    counts = Counter(name.casefold() for name in output_names)
+    print(f"Looking up Wiki metadata for {os.path.basename(base_dir)}...", flush=True)
+    wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
 
     failures = False
-    for epub in epub_files:
+    for volume, output_name in zip(volumes, output_names):
+        source_names = " + ".join(os.path.basename(path) for path in volume)
+        if counts[output_name.casefold()] > 1:
+            failures = True
+            print(f"❌ Multiple inputs would write {output_name}: {source_names}", file=sys.stderr)
+            continue
         try:
-            epub_to_cbz_fixed(
-                os.path.join(base_dir, epub),
+            print(f"{'Merging' if len(volume) == 2 else 'Converting'} {source_names}", flush=True)
+            convert_epub_volume(
+                volume,
                 wiki_series_metadata=wiki_series_metadata,
                 series_title=args.series_title,
             )
         except Exception as exc:
             failures = True
-            print(f"❌ EPUB conversion failed: {epub} ({exc})", file=sys.stderr)
-    if failures:
-        sys.exit(1)
+            print(f"❌ EPUB conversion failed: {source_names} ({exc})", file=sys.stderr)
+    return int(failures)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
