@@ -58,6 +58,17 @@ def find_opf_path(extract_dir: str) -> str:
     raise ValueError("OPF not found in container.xml")
 
 
+def read_epub_credit_fields(epub_root: str) -> tuple[str | None, str | None]:
+    metadata = ET.parse(find_opf_path(epub_root)).getroot().find("{*}metadata")
+    if metadata is None:
+        return None, None
+    dc = "{http://purl.org/dc/elements/1.1/}"
+    creators = [e.text.strip() for e in metadata.findall(f"{dc}creator") if e.text and e.text.strip()]
+    publisher = (metadata.findtext(f"{dc}publisher") or "").strip()
+    # Kmoe uses its own name in this field for its packaged EPUBs.
+    return ", ".join(dict.fromkeys(creators)) or None, publisher if publisher.casefold() != "kmoe" else None
+
+
 def parse_opf(opf_path: str, epub_root: str):
     tree = ET.parse(opf_path)
     root = tree.getroot()

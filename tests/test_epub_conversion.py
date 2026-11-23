@@ -29,8 +29,12 @@ class EpubConversionTests(unittest.TestCase):
             Image.new("RGB", (12, 8), color).save(output, format="PNG")
             return output.getvalue()
 
-    def write_epub(self, spine, files, *, opf="OEBPS/content.opf"):
+    def write_epub(self, spine, files, *, opf="OEBPS/content.opf", credits=None):
         package = ET.Element("package")
+        if credits:
+            metadata = ET.SubElement(package, "metadata")
+            for field, value in credits.items():
+                ET.SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{field}").text = value
         manifest = ET.SubElement(package, "manifest")
         reading_order = ET.SubElement(package, "spine")
         for index, href in enumerate(spine):
@@ -165,6 +169,22 @@ class EpubConversionTests(unittest.TestCase):
             self.assertEqual((info.series, info.number, info.page_count, info.count), ("Example", "1", 2, 2))
         with zipfile.ZipFile(self.series_dir / "Example - 第002卷（上）.cbz") as archive:
             self.assertEqual(archive.read("0001.png"), self.png("green"))
+
+    def test_no_wiki_uses_epub_creator_and_explicit_publisher(self):
+        self.write_epub(
+            ["page.png"], {"page.png": self.png("red")},
+            credits={"creator": "水木茂", "publisher": "Kmoe"},
+        )
+        with patch("main.load_wiki_metadata_for_main") as lookup:
+            for publisher_args, expected in (([], None), (["--publisher", "遠足文化"], "遠足文化")):
+                with self.subTest(publisher=expected), patch(
+                    "sys.argv", ["epub2cbz", "--no-wiki", *publisher_args, str(self.epub)]
+                ):
+                    self.assertEqual(main(), 0)
+                    with zipfile.ZipFile(self.cbz) as archive:
+                        info = ComicInfo.from_xml_bytes(archive.read("ComicInfo.xml"))
+                    self.assertEqual((info.writer, info.publisher, info.number), (["水木茂"], expected, "1"))
+            lookup.assert_not_called()
 
     def test_legacy_opf_keeps_white_page_and_skips_explicit_ad_document(self):
         white = self.png("white")

@@ -433,8 +433,11 @@ def build_comicinfo_xml_for_epub(
     wiki_series: Optional[WikiSeriesMetadata] = None,
     series_title: Optional[str] = None,
     keep_local_index: bool = False,
+    epub_writer: Optional[str] = None,
+    epub_publisher: Optional[str] = None,
+    publisher_override: Optional[str] = None,
 ) -> Optional[bytes]:
-    if wiki_series is None and not keep_local_index:
+    if wiki_series is None and not (keep_local_index or epub_writer or epub_publisher or publisher_override):
         return None
 
     epub = Path(epub_path)
@@ -470,6 +473,8 @@ def build_comicinfo_xml_for_epub(
             write_number=volume_number is not None,
             page_count=page_count,
         )
+    comicinfo.writer = comicinfo.writer or epub_writer
+    comicinfo.publisher = publisher_override or comicinfo.publisher or epub_publisher
     if is_special:
         comicinfo.format = "Special"
 

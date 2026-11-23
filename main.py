@@ -17,7 +17,7 @@ from metadata.epub_comicinfo import (
 )
 from metadata.wiki_models import WikiSearchItem
 from parser.html_parser import extract_image_references, is_image_file
-from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images
+from utils.epub_utils import extract_epub, get_html_files_by_spine, fallback_all_images, read_epub_credit_fields
 from utils.metadata_utils import build_output_cbz_name, group_epub_volumes, split_volume_part
 
 
@@ -61,7 +61,7 @@ def volume_output_name(epubs: tuple[str, ...], series_title: str | None = None) 
     return output_name
 
 
-def prepare_epub_pages(epub_path: str, work_dir: str) -> list[str]:
+def prepare_epub_pages(epub_path: str, work_dir: str) -> tuple[list[str], str | None, str | None]:
     epub_root = os.path.join(work_dir, "epub")
     rotated_dir = os.path.join(work_dir, "rotated")
     os.makedirs(epub_root)
@@ -70,7 +70,9 @@ def prepare_epub_pages(epub_path: str, work_dir: str) -> list[str]:
     pages = collect_epub_pages(epub_root)
     if not pages:
         raise ValueError(f"EPUB has no image pages: {epub_path}")
-    return [prepare_epub_page(path, rotated_dir, rotate=rotate) for path, rotate in pages]
+    images = [prepare_epub_page(path, rotated_dir, rotate=rotate) for path, rotate in pages]
+    writer, publisher = read_epub_credit_fields(epub_root)
+    return images, writer, publisher
 
 
 def page_digest(path: str) -> bytes:
@@ -104,16 +106,18 @@ def merge_split_volume_pages(upper: list[str], lower: list[str]) -> list[str]:
     return upper + lower
 
 
-def convert_epub_volume(epubs: tuple[str, ...], wiki_series_metadata=None, *, series_title=None):
+def convert_epub_volume(epubs: tuple[str, ...], wiki_series_metadata=None, *, series_title=None, publisher=None):
     epub_path = epubs[0]
     output_name = volume_output_name(epubs, series_title)
     if series_title is not None:
         series_title = series_title.strip()
     output_cbz = os.path.join(os.path.dirname(epub_path), output_name)
     with tempfile.TemporaryDirectory(prefix="epub2cbz_") as temp_dir:
-        final_images = prepare_epub_pages(epub_path, os.path.join(temp_dir, "first"))
+        final_images, writer, epub_publisher = prepare_epub_pages(epub_path, os.path.join(temp_dir, "first"))
         if len(epubs) == 2:
-            lower = prepare_epub_pages(epubs[1], os.path.join(temp_dir, "second"))
+            lower, lower_writer, lower_publisher = prepare_epub_pages(epubs[1], os.path.join(temp_dir, "second"))
+            writer = writer or lower_writer
+            epub_publisher = epub_publisher or lower_publisher
             original_count = len(final_images) + len(lower)
             final_images = merge_split_volume_pages(final_images, lower)
             print(f"  - Removed {original_count - len(final_images)} duplicate pages", flush=True)
@@ -125,6 +129,9 @@ def convert_epub_volume(epubs: tuple[str, ...], wiki_series_metadata=None, *, se
             wiki_series=wiki_series_metadata,
             series_title=series_title,
             keep_local_index=len(epubs) == 2,
+            epub_writer=writer,
+            epub_publisher=epub_publisher,
+            publisher_override=publisher,
         )
 
         make_cbz(final_images, output_cbz, comicinfo_xml=comicinfo_xml)
@@ -145,7 +152,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Convert one EPUB or scan the executable's directory for EPUBs.")
     parser.add_argument("epub", nargs="?", help="Convert this EPUB and its matching upper/lower part, if present.")
     parser.add_argument("--series-title", help="Use this series name for the CBZ filename and ComicInfo.")
-    parser.add_argument(
+    parser.add_argument("--publisher", help="Use this publisher in ComicInfo.")
+    wiki_options = parser.add_mutually_exclusive_group()
+    wiki_options.add_argument("--no-wiki", action="store_true", help="Use local metadata without querying Wiki.")
+    wiki_options.add_argument(
         "--wiki-url",
         help="Explicit zh.wikipedia page URL to use as metadata source when the directory name is not the Wiki title.",
     )
@@ -234,8 +244,10 @@ def main():
         print(f"❌ {exc}", file=sys.stderr)
         return 1
     counts = Counter(name.casefold() for name in output_names)
-    print(f"Looking up Wiki metadata for {os.path.basename(base_dir)}...", flush=True)
-    wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
+    wiki_series_metadata = None
+    if not args.no_wiki:
+        print(f"Looking up Wiki metadata for {os.path.basename(base_dir)}...", flush=True)
+        wiki_series_metadata = load_wiki_metadata_for_main(base_dir, args.wiki_url)
 
     failures = False
     for volume, output_name in zip(volumes, output_names):
@@ -250,6 +262,7 @@ def main():
                 volume,
                 wiki_series_metadata=wiki_series_metadata,
                 series_title=args.series_title,
+                publisher=(args.publisher or "").strip() or None,
             )
         except Exception as exc:
             failures = True
